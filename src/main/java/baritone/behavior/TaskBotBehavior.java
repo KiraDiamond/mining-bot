@@ -203,6 +203,9 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private long nativeClearAreaLastRefreshAt;
     private boolean nativeClearAreaRecovering;
     private boolean clearBoxBreakSnapshotReady;
+    private BlockPos pendingNativeClearMin;
+    private BlockPos pendingNativeClearMax;
+    private BlockPos pendingNativeClearApproach;
 
     public TaskBotBehavior(Baritone baritone) {
         super(baritone);
@@ -314,6 +317,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         }
 
         pollCommandFile();
+        monitorPendingNativeClearArea();
         monitorNativeClearAreaCompletion();
         enforceIdleSafety();
         if (handleSetSpawn()) {
@@ -537,10 +541,71 @@ public final class TaskBotBehavior extends Behavior implements Helper {
                 && feet.getY() >= allowedBreakMin.getY() - 1 && feet.getY() <= allowedBreakMax.getY() + 8;
     }
 
+    private boolean isNearCuboid(BlockPos feet, BlockPos min, BlockPos max) {
+        return feet.getX() >= min.getX() - 4 && feet.getX() <= max.getX() + 4
+                && feet.getZ() >= min.getZ() - 4 && feet.getZ() <= max.getZ() + 4
+                && feet.getY() >= min.getY() - 1 && feet.getY() <= max.getY() + 8;
+    }
+
     private BlockPos allowedCuboidApproachTarget(BlockPos feet) {
         int centerX = (allowedBreakMin.getX() + allowedBreakMax.getX()) / 2;
         int centerZ = (allowedBreakMin.getZ() + allowedBreakMax.getZ()) / 2;
         return new BlockPos(centerX, allowedBreakMin.getY(), centerZ);
+    }
+
+    private BlockPos findNativeClearApproach(BlockPos min, BlockPos max) {
+        BlockPos feet = ctx.playerFeet();
+        BlockPos best = null;
+        double bestScore = Double.MAX_VALUE;
+        for (int y = max.getY() + 4; y >= min.getY() - 1; y--) {
+            for (int x = min.getX() - 1; x <= max.getX() + 1; x++) {
+                for (int z = min.getZ() - 1; z <= max.getZ() + 1; z++) {
+                    boolean perimeter = x == min.getX() - 1 || x == max.getX() + 1 || z == min.getZ() - 1 || z == max.getZ() + 1;
+                    if (!perimeter) {
+                        continue;
+                    }
+                    BlockPos stand = new BlockPos(x, y, z);
+                    if (!canStandAt(stand)) {
+                        continue;
+                    }
+                    double score = feet.distSqr(stand);
+                    if (score < bestScore) {
+                        bestScore = score;
+                        best = stand.immutable();
+                    }
+                }
+            }
+        }
+        if (best != null) {
+            return best;
+        }
+        return new BlockPos((min.getX() + max.getX()) / 2, max.getY() + 1, (min.getZ() + max.getZ()) / 2);
+    }
+
+    private void monitorPendingNativeClearArea() {
+        if (pendingNativeClearMin == null || pendingNativeClearMax == null) {
+            return;
+        }
+        BlockPos feet = ctx.playerFeet();
+        if (isNearCuboid(feet, pendingNativeClearMin, pendingNativeClearMax)) {
+            BlockPos min = pendingNativeClearMin;
+            BlockPos max = pendingNativeClearMax;
+            pendingNativeClearMin = null;
+            pendingNativeClearMax = null;
+            pendingNativeClearApproach = null;
+            startNativeClearArea(min, max);
+            return;
+        }
+        if (pendingNativeClearApproach == null || !canStandAt(pendingNativeClearApproach)) {
+            pendingNativeClearApproach = findNativeClearApproach(pendingNativeClearMin, pendingNativeClearMax);
+        }
+        boolean noPath = !baritone.getPathingBehavior().isPathing();
+        if (noPath && System.currentTimeMillis() - nativeClearAreaLastRefreshAt >= 20_000L) {
+            beginNonBreakingTravel();
+            baritone.getCommandManager().execute("goto " + pendingNativeClearApproach.getX() + " " + pendingNativeClearApproach.getY() + " " + pendingNativeClearApproach.getZ());
+            nativeClearAreaLastRefreshAt = System.currentTimeMillis();
+            logDirect("TaskBot: approaching native cleararea " + pendingNativeClearMin + " -> " + pendingNativeClearMax + " via " + pendingNativeClearApproach + ".");
+        }
     }
 
     private void refreshNativeClearArea(String reason) {
@@ -1407,6 +1472,28 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private void startClearBox(BlockPos a, BlockPos b) {
         BlockPos min = new BlockPos(Math.min(a.getX(), b.getX()), Math.min(a.getY(), b.getY()), Math.min(a.getZ(), b.getZ()));
         BlockPos max = new BlockPos(Math.max(a.getX(), b.getX()), Math.max(a.getY(), b.getY()), Math.max(a.getZ(), b.getZ()));
+        if (!isNearCuboid(ctx.playerFeet(), min, max)) {
+            clearCurrentClearBoxState();
+            clearAllowedBreakCuboid();
+            pendingNativeClearMin = min;
+            pendingNativeClearMax = max;
+            pendingNativeClearApproach = findNativeClearApproach(min, max);
+            beginNonBreakingTravel();
+            baritone.getPathingBehavior().cancelEverything();
+            baritone.getCommandManager().execute("stop");
+            baritone.getCommandManager().execute("goto " + pendingNativeClearApproach.getX() + " " + pendingNativeClearApproach.getY() + " " + pendingNativeClearApproach.getZ());
+            nativeClearAreaLastRefreshAt = System.currentTimeMillis();
+            logDirect("TaskBot: staged native cleararea " + min + " -> " + max + "; travelling non-destructively via " + pendingNativeClearApproach + ".");
+            return;
+        }
+        startNativeClearArea(min, max);
+    }
+
+    private void startNativeClearArea(BlockPos min, BlockPos max) {
+        clearCurrentClearBoxState();
+        pendingNativeClearMin = null;
+        pendingNativeClearMax = null;
+        pendingNativeClearApproach = null;
         clearBoxMin = null;
         clearBoxMax = null;
         clearBoxTarget = null;
@@ -1442,7 +1529,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         logDirect("TaskBot: native Baritone cleararea started " + min + " -> " + max + "; snapshot locked " + allowedBreakPositions.size() + " block(s); allowBreak=" + Baritone.settings().allowBreak.value + " allowPlace=" + Baritone.settings().allowPlace.value + ".");
     }
 
-    private void stopClearBox() {
+    private void clearCurrentClearBoxState() {
         clearBoxMin = null;
         clearBoxMax = null;
         clearBoxTarget = null;
@@ -1453,9 +1540,18 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         clearBoxLastGotoTarget = null;
         clearBoxLastActivityAt = 0L;
         clearBoxGotoCooldown = 0;
+        clearBoxLogCooldown = 0;
         clearBoxBlockedReports = 0;
         clearBoxNoPathSkips = 0;
         clearBoxBreakSnapshotReady = false;
+        nativeClearAreaRecovering = false;
+    }
+
+    private void stopClearBox() {
+        clearCurrentClearBoxState();
+        pendingNativeClearMin = null;
+        pendingNativeClearMax = null;
+        pendingNativeClearApproach = null;
         forceSafeIdle();
     }
 
