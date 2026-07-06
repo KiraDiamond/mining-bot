@@ -2134,6 +2134,11 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private boolean handleDeposit() {
         LocalPlayer player = ctx.player();
         if (!(player.containerMenu instanceof InventoryMenu)) {
+            if (isActiveMiningTask()) {
+                player.closeContainer();
+                depositCooldown = ACTION_COOLDOWN_TICKS;
+                return false;
+            }
             dumpInventoryIntoOpenContainer();
             return true;
         }
@@ -2144,6 +2149,17 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             return false;
         }
         if (!inventoryFull()) {
+            return false;
+        }
+
+        if (isActiveMiningTask()) {
+            int dropped = dropMiningOverflowItems();
+            if (dropped > 0) {
+                logDirect("TaskBot: mining inventory full; dropped " + dropped + " overflow stack(s) and kept clearing.");
+            } else {
+                logDirect("TaskBot: mining inventory full but only protected gear remains; keeping clear task active.");
+            }
+            depositCooldown = ACTION_COOLDOWN_TICKS;
             return false;
         }
 
@@ -2215,6 +2231,38 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             }
         }
         return dropped;
+    }
+
+    private int dropMiningOverflowItems() {
+        if (!(ctx.player().containerMenu instanceof InventoryMenu)) {
+            return 0;
+        }
+        int dropped = 0;
+        NonNullList<ItemStack> inv = ctx.player().getInventory().getNonEquipmentItems();
+        for (int i = 0; i < inv.size(); i++) {
+            ItemStack stack = inv.get(i);
+            if (!stack.isEmpty() && shouldDropForMiningOverflow(stack)) {
+                int slotId = i < 9 ? i + 36 : i;
+                ctx.playerController().windowClick(ctx.player().inventoryMenu.containerId, slotId, 1, ContainerInput.THROW, ctx.player());
+                dropped++;
+                if (dropped >= 18) {
+                    break;
+                }
+            }
+        }
+        return dropped;
+    }
+
+    private boolean shouldDropForMiningOverflow(ItemStack stack) {
+        if (stack.isEmpty() || shouldKeep(stack)) {
+            return false;
+        }
+        Item item = stack.getItem();
+        return isDropFiller(item) || item instanceof BlockItem;
+    }
+
+    private boolean isActiveMiningTask() {
+        return clearBoxMin != null || hasTaskBreakSnapshot();
     }
 
     private boolean isNearby(BlockPos pos, int maxDistanceSq) {
