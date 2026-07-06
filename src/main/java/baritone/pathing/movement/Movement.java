@@ -231,6 +231,10 @@ public abstract class Movement implements IMovement, MovementHelper {
     }
 
     protected boolean safeToCancel(MovementState currentState) {
+        if (breakLock != null && !MovementHelper.canWalkThrough(ctx, breakLock)) {
+            Optional<Rotation> reachable = RotationUtils.reachable(ctx, breakLock, ctx.playerController().getBlockReachDistance());
+            return reachable.isEmpty();
+        }
         return true;
     }
 
