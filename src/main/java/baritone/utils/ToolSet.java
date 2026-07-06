@@ -146,7 +146,8 @@ public class ToolSet {
             return player.getInventory().getSelectedSlot();
         }
 
-        int best = 0;
+        int fallback = getSafeFallbackSlot();
+        int best = -1;
         double highestSpeed = Double.NEGATIVE_INFINITY;
         int lowestCost = Integer.MIN_VALUE;
         boolean bestSilkTouch = false;
@@ -161,6 +162,9 @@ public class ToolSet {
                 continue;
             }
             double speed = calculateSpeedVsBlock(itemStack, blockState);
+            if (!isAppropriateTool(itemStack, blockState)) {
+                continue;
+            }
             boolean silkTouch = hasSilkTouch(itemStack);
             if (speed > highestSpeed) {
                 highestSpeed = speed;
@@ -178,7 +182,29 @@ public class ToolSet {
                 }
             }
         }
-        return best;
+        return best == -1 ? fallback : best;
+    }
+
+    private int getSafeFallbackSlot() {
+        int selected = player.getInventory().getSelectedSlot();
+        int harmless = -1;
+        for (int i = 0; i < 9; i++) {
+            ItemStack stack = player.getInventory().getItem(i);
+            if (stack.isEmpty()) {
+                return i;
+            }
+            if (harmless == -1 && stack.getMaxDamage() <= 0) {
+                harmless = i;
+            }
+        }
+        return harmless == -1 ? selected : harmless;
+    }
+
+    private static boolean isAppropriateTool(ItemStack itemStack, BlockState blockState) {
+        if (itemStack.isEmpty()) {
+            return false;
+        }
+        return itemStack.isCorrectToolForDrops(blockState) || itemStack.getDestroySpeed(blockState) > 1.0F;
     }
 
     /**

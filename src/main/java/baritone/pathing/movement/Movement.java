@@ -23,6 +23,7 @@ import baritone.api.pathing.movement.IMovement;
 import baritone.api.pathing.movement.MovementStatus;
 import baritone.api.utils.*;
 import baritone.api.utils.input.Input;
+import baritone.behavior.TaskBotBehavior;
 import baritone.behavior.PathingBehavior;
 import baritone.utils.BlockStateInterface;
 import java.util.*;
@@ -63,6 +64,8 @@ public abstract class Movement implements IMovement, MovementHelper {
     private Set<BetterBlockPos> validPositionsCached = null;
 
     private Boolean calculatedWhileLoaded;
+
+    private BetterBlockPos breakLock;
 
     protected Movement(IBaritone baritone, BetterBlockPos src, BetterBlockPos dest, BetterBlockPos[] toBreak, BetterBlockPos toPlace) {
         this.baritone = baritone;
@@ -154,8 +157,42 @@ public abstract class Movement implements IMovement, MovementHelper {
         if (state.getStatus() == MovementStatus.WAITING) {
             return true;
         }
+        if (breakLock != null) {
+            if (TaskBotBehavior.hasTaskBreakSnapshot()
+                    && !TaskBotBehavior.isTaskBreakAllowed(breakLock)
+                    && !TaskBotBehavior.isSafeTravelBreak(BlockStateInterface.get(ctx, breakLock))) {
+                breakLock = null;
+                state.setStatus(MovementStatus.UNREACHABLE);
+                return true;
+            }
+            if (MovementHelper.canWalkThrough(ctx, breakLock)) {
+                breakLock = null;
+            } else if (!ctx.world().getEntitiesOfClass(FallingBlockEntity.class, new AABB(0, 0, 0, 1, 1.1, 1).move(breakLock)).isEmpty() && Baritone.settings().pauseMiningForFallingBlocks.value) {
+                return false;
+            } else {
+                Optional<Rotation> lockedReachable = RotationUtils.reachable(ctx, breakLock, ctx.playerController().getBlockReachDistance());
+                if (lockedReachable.isPresent()) {
+                    MovementHelper.switchToBestToolFor(ctx, BlockStateInterface.get(ctx, breakLock));
+                    Rotation rotTowardsBlock = lockedReachable.get();
+                    state.setTarget(new MovementState.MovementTarget(rotTowardsBlock, true));
+                    if (ctx.isLookingAt(breakLock) || ctx.playerRotations().isReallyCloseTo(rotTowardsBlock)) {
+                        state.setInput(Input.CLICK_LEFT, true);
+                    }
+                    return false;
+                }
+                // Player moved out of safe reach; release the lock and let pathing move closer.
+                breakLock = null;
+            }
+        }
+
         boolean somethingInTheWay = false;
         for (BetterBlockPos blockPos : positionsToBreak) {
+            if (TaskBotBehavior.hasTaskBreakSnapshot()
+                    && !TaskBotBehavior.isTaskBreakAllowed(blockPos)
+                    && !TaskBotBehavior.isSafeTravelBreak(BlockStateInterface.get(ctx, blockPos))) {
+                state.setStatus(MovementStatus.UNREACHABLE);
+                return true;
+            }
             if (!ctx.world().getEntitiesOfClass(FallingBlockEntity.class, new AABB(0, 0, 0, 1, 1.1, 1).move(blockPos)).isEmpty() && Baritone.settings().pauseMiningForFallingBlocks.value) {
                 return false;
             }
@@ -167,22 +204,18 @@ public abstract class Movement implements IMovement, MovementHelper {
                     Rotation rotTowardsBlock = reachable.get();
                     state.setTarget(new MovementState.MovementTarget(rotTowardsBlock, true));
                     if (ctx.isLookingAt(blockPos) || ctx.playerRotations().isReallyCloseTo(rotTowardsBlock)) {
+                        breakLock = blockPos;
                         state.setInput(Input.CLICK_LEFT, true);
                     }
                     return false;
                 }
-                //get rekt minecraft
-                //i'm doing it anyway
-                //i dont care if theres snow in the way!!!!!!!
-                //you dont own me!!!!
-                state.setTarget(new MovementState.MovementTarget(RotationUtils.calcRotationFromVec3d(ctx.playerHead(),
-                        VecUtils.getBlockPosCenter(blockPos), ctx.playerRotations()), true)
-                );
-                // don't check selectedblock on this one, this is a fallback when we can't see any face directly, it's intended to be breaking the "incorrect" block
-                state.setInput(Input.CLICK_LEFT, true);
+                // If the block is not reachable at our configured safe mining reach,
+                // move closer instead of staring/swinging from too far away.
+                MovementHelper.moveTowards(ctx, state, blockPos);
                 return false;
             }
         }
+        breakLock = null;
         if (somethingInTheWay) {
             // There's a block or blocks that we can't walk through, but we have no target rotation to reach any
             // So don't return true, actually set state to unreachable

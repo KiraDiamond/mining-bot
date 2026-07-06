@@ -30,6 +30,7 @@ import baritone.api.schematic.format.ISchematicFormat;
 import baritone.api.utils.*;
 import baritone.api.utils.Rotation;
 import baritone.api.utils.input.Input;
+import baritone.behavior.TaskBotBehavior;
 import baritone.pathing.movement.CalculationContext;
 import baritone.pathing.movement.Movement;
 import baritone.pathing.movement.MovementHelper;
@@ -46,7 +47,7 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.Vec3i;
-import net.minecraft.util.Tuple;
+import baritone.api.utils.Tuple;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
@@ -1037,10 +1038,10 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         if (!ignoreDirection && ignoredProps.isEmpty()) {
             return first.equals(second); // early return if no properties are being ignored
         }
-        Map<Property<?>, Comparable<?>> map1 = first.getValues();
-        Map<Property<?>, Comparable<?>> map2 = second.getValues();
-        for (Property<?> prop : map1.keySet()) {
-            if (map1.get(prop) != map2.get(prop)
+        for (Property<?> prop : first.getProperties()) {
+            Comparable<?> firstValue = first.getValue((Property) prop);
+            Comparable<?> secondValue = second.getValue((Property) prop);
+            if (!java.util.Objects.equals(firstValue, secondValue)
                     && !(ignoreDirection && ORIENTATION_PROPS.contains(prop))
                     && !ignoredProps.contains(prop.getName())) {
                 return false;
@@ -1150,7 +1151,9 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
 
         @Override
         public double breakCostMultiplierAt(int x, int y, int z, BlockState current) {
-            if ((!allowBreak && !allowBreakAnyway.contains(current.getBlock())) || isPossiblyProtected(x, y, z)) {
+            if ((!allowBreak && !allowBreakAnyway.contains(current.getBlock()))
+                    || !TaskBotBehavior.isTaskBreakAllowed(new BlockPos(x, y, z))
+                    || isPossiblyProtected(x, y, z)) {
                 return COST_INF;
             }
             BlockState sch = getSchematic(x, y, z, current);

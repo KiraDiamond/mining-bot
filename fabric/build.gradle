@@ -86,7 +86,7 @@ task createDist(type: CreateDistTask, dependsOn: proguard) {
     compType "fabric"
 }
 
-build.finalizedBy(createDist)
+// build.finalizedBy(createDist) -- disabled for Java 25 26.2 port
 
 publishing {
     publications {

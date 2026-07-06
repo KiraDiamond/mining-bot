@@ -109,6 +109,7 @@ public class Baritone implements IBaritone {
             this.pathingBehavior      = this.registerBehavior(PathingBehavior::new);
             this.inventoryBehavior    = this.registerBehavior(InventoryBehavior::new);
             this.inputOverrideHandler = this.registerBehavior(InputOverrideHandler::new);
+            this.registerBehavior(TaskBotBehavior::new);
             this.registerBehavior(WaypointBehavior::new);
         }
 
@@ -245,7 +246,7 @@ public class Baritone implements IBaritone {
         new Thread(() -> {
             try {
                 Thread.sleep(100);
-                mc.execute(() -> mc.setScreen(new GuiClick()));
+                mc.execute(() -> mc.setScreenAndShow(new GuiClick()));
             } catch (Exception ignored) {}
         }).start();
     }

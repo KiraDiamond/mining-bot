@@ -221,7 +221,7 @@ public interface MovementHelper extends ActionCosts, Helper {
             }
 
             BlockState up = bsi.get0(x, y + 1, z);
-            if (!up.getFluidState().isEmpty() || up.getBlock() instanceof WaterlilyBlock) {
+            if (!up.getFluidState().isEmpty() || up.getBlock() instanceof LilyPadBlock) {
                 return false;
             }
             return fluidState.getType() instanceof WaterFluid;
@@ -615,6 +615,11 @@ public interface MovementHelper extends ActionCosts, Helper {
             double result = 1 / strVsBlock;
             result += context.breakBlockAdditionalCost;
             result *= mult;
+            // The vanilla/protocol estimate is optimistic for the headless task bots.
+            // If we underestimate, Baritone can switch movements while the block is
+            // only partially cracked. Bias high so it keeps mining until the server
+            // confirms the block is gone.
+            result = Math.ceil((result * 2.0D) + 4.0D);
             if (includeFalling) {
                 BlockState above = context.get(x, y + 1, z);
                 if (above.getBlock() instanceof FallingBlock) {

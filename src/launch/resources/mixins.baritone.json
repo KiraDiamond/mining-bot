@@ -25,11 +25,7 @@
     "MixinPalettedContainer",
     "MixinPalettedContainer$Data",
     "MixinPlayerController",
-    "MixinRenderPipelines",
-    "MixinRenderType",
-    "MixinScreen",
-    "MixinWorldRenderer"
+    "MixinScreen"
   ],
-  "mixins": [
-  ]
+  "mixins": []
 }

@@ -20,6 +20,7 @@ package baritone.pathing.movement;
 import baritone.Baritone;
 import baritone.api.IBaritone;
 import baritone.api.pathing.movement.ActionCosts;
+import baritone.behavior.TaskBotBehavior;
 import baritone.cache.WorldData;
 import baritone.pathing.precompute.PrecomputedData;
 import baritone.utils.BlockStateInterface;
@@ -202,6 +203,11 @@ public class CalculationContext {
 
     public double breakCostMultiplierAt(int x, int y, int z, BlockState current) {
         if (!allowBreak && !allowBreakAnyway.contains(current.getBlock())) {
+            return COST_INF;
+        }
+        if (TaskBotBehavior.hasTaskBreakSnapshot()
+                && !TaskBotBehavior.isTaskBreakAllowed(new BlockPos(x, y, z))
+                && !TaskBotBehavior.isSafeTravelBreak(current)) {
             return COST_INF;
         }
         if (isPossiblyProtected(x, y, z)) {
