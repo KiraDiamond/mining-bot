@@ -18,6 +18,11 @@ import baritone.api.utils.Rotation;
 import baritone.api.utils.RotationUtils;
 import baritone.api.utils.input.Input;
 import baritone.pathing.movement.MovementHelper;
+import net.minecraft.client.CloudStatus;
+import net.minecraft.client.GraphicsPreset;
+import net.minecraft.client.OptionInstance;
+import net.minecraft.client.Options;
+import net.minecraft.client.PrioritizeChunkUpdates;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -25,6 +30,8 @@ import net.minecraft.core.NonNullList;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.protocol.game.ClientboundPlayerChatPacket;
 import net.minecraft.network.protocol.game.ClientboundSystemChatPacket;
+import net.minecraft.server.level.ParticleStatus;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.EquipmentSlot;
@@ -206,6 +213,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private BlockPos pendingNativeClearMin;
     private BlockPos pendingNativeClearMax;
     private BlockPos pendingNativeClearApproach;
+    private boolean taskClientOptionsApplied;
 
     public TaskBotBehavior(Baritone baritone) {
         super(baritone);
@@ -241,6 +249,41 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         addIfMissing(Baritone.settings().buildIgnoreBlocks.value, block);
     }
 
+    private void applyTaskClientOptions() {
+        if (taskClientOptionsApplied) {
+            return;
+        }
+        Options options = ctx.minecraft().options;
+        setOption(options.renderDistance(), 2);
+        setOption(options.simulationDistance(), 2);
+        setOption(options.entityDistanceScaling(), 0.25D);
+        setOption(options.framerateLimit(), 30);
+        setOption(options.mipmapLevels(), 0);
+        setOption(options.biomeBlendRadius(), 0);
+        setOption(options.graphicsPreset(), GraphicsPreset.FAST);
+        setOption(options.cloudStatus(), CloudStatus.OFF);
+        setOption(options.particles(), ParticleStatus.MINIMAL);
+        setOption(options.entityShadows(), false);
+        setOption(options.bobView(), false);
+        setOption(options.ambientOcclusion(), false);
+        setOption(options.autoJump(), false);
+        setOption(options.fullscreen(), false);
+        setOption(options.showAutosaveIndicator(), false);
+        setOption(options.prioritizeChunkUpdates(), PrioritizeChunkUpdates.NONE);
+        for (SoundSource source : SoundSource.values()) {
+            setOption(options.getSoundSourceOptionInstance(source), 0.0D);
+        }
+        options.save();
+        taskClientOptionsApplied = true;
+        logDirect("TaskBot: forced low-render client options for headless mining.");
+    }
+
+    private <T> void setOption(OptionInstance<T> option, T value) {
+        if (!value.equals(option.get())) {
+            option.set(value);
+        }
+    }
+
     private static <T> void addIfMissing(java.util.List<T> list, T value) {
         if (!list.contains(value)) {
             list.add(value);
@@ -269,6 +312,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         if (ctx.player() == null || ctx.world() == null || ctx.minecraft().gameMode == null) {
             return;
         }
+        applyTaskClientOptions();
 
         if (sleepCooldown > 0) {
             sleepCooldown--;
