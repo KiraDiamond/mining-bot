@@ -418,10 +418,6 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             nativeClearAreaLastRefreshAt = System.currentTimeMillis();
             return;
         }
-        if (noSelectedBlock && noPath && System.currentTimeMillis() - nativeClearAreaLastRefreshAt >= 20_000L && retargetNearestAllowedBlock()) {
-            nativeClearAreaLastRefreshAt = System.currentTimeMillis();
-            return;
-        }
         if (noSelectedBlock && noPath && System.currentTimeMillis() - nativeClearAreaLastRefreshAt >= 20_000L) {
             refreshNativeClearArea("Baritone idle with blocks remaining");
         }
@@ -587,7 +583,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             return;
         }
         BlockPos feet = ctx.playerFeet();
-        if (isNearCuboid(feet, pendingNativeClearMin, pendingNativeClearMax)) {
+        if (isCloseEnoughToStartNativeClearArea(feet, pendingNativeClearMin, pendingNativeClearMax)) {
             BlockPos min = pendingNativeClearMin;
             BlockPos max = pendingNativeClearMax;
             pendingNativeClearMin = null;
@@ -606,6 +602,12 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             nativeClearAreaLastRefreshAt = System.currentTimeMillis();
             logDirect("TaskBot: approaching native cleararea " + pendingNativeClearMin + " -> " + pendingNativeClearMax + " via " + pendingNativeClearApproach + ".");
         }
+    }
+
+    private boolean isCloseEnoughToStartNativeClearArea(BlockPos feet, BlockPos min, BlockPos max) {
+        return feet.getX() >= min.getX() - 12 && feet.getX() <= max.getX() + 12
+                && feet.getZ() >= min.getZ() - 12 && feet.getZ() <= max.getZ() + 12
+                && feet.getY() >= min.getY() - 8 && feet.getY() <= max.getY() + 16;
     }
 
     private void refreshNativeClearArea(String reason) {
@@ -1472,7 +1474,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private void startClearBox(BlockPos a, BlockPos b) {
         BlockPos min = new BlockPos(Math.min(a.getX(), b.getX()), Math.min(a.getY(), b.getY()), Math.min(a.getZ(), b.getZ()));
         BlockPos max = new BlockPos(Math.max(a.getX(), b.getX()), Math.max(a.getY(), b.getY()), Math.max(a.getZ(), b.getZ()));
-        if (!isNearCuboid(ctx.playerFeet(), min, max)) {
+        if (!isCloseEnoughToStartNativeClearArea(ctx.playerFeet(), min, max)) {
             clearCurrentClearBoxState();
             clearAllowedBreakCuboid();
             pendingNativeClearMin = min;
