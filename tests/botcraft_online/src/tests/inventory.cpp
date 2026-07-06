@@ -1,0 +1,450 @@
+#include "TestManager.hpp"
+#include "MinecraftServer.hpp"
+#include "Utils.hpp"
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <botcraft/AI/Tasks/InventoryTasks.hpp>
+#include <botcraft/AI/Tasks/EntitiesTasks.hpp>
+
+#include <botcraft/Game/Inventory/InventoryManager.hpp>
+#include <botcraft/Game/World/World.hpp>
+#include <botcraft/Game/Entities/EntityManager.hpp>
+#include <botcraft/Game/Entities/entities/Entity.hpp>
+#include <botcraft/Game/Entities/entities/item/ItemEntity.hpp>
+#include <botcraft/Game/Entities/entities/npc/villager/VillagerEntity.hpp>
+
+#include <array>
+
+
+std::string GetItemName(const ProtocolCraft::Slot& slot)
+{
+    if (slot.IsEmptySlot())
+    {
+        return "";
+    }
+
+    return Botcraft::AssetsManager::getInstance().GetItem(slot.GetItemId())->GetName();
+}
+
+TEST_CASE("receive item")
+{
+    std::unique_ptr<Botcraft::ManagersClient> bot = SetupTestBot();
+
+    CHECK(GiveItem(bot, "minecraft:stick", 1));
+    CHECK(GiveItem(bot, "minecraft:stick", 1));
+
+    const std::shared_ptr<Botcraft::InventoryManager> inventory_manager = bot->GetInventoryManager();
+    REQUIRE_FALSE(inventory_manager->GetHotbarSelected().IsEmptySlot());
+}
+
+TEST_CASE("swap slots")
+{
+    std::unique_ptr<Botcraft::SimpleBehaviourClient> bot = SetupTestBot<Botcraft::SimpleBehaviourClient>();
+
+    CHECK(GiveItem(bot, "minecraft:stick", 5));
+    CHECK(GiveItem(bot, "minecraft:diamond_pickaxe", 1));
+
+    bot->SyncAction(5000, Botcraft::SwapItemsInContainer, Botcraft::Window::PLAYER_INVENTORY_INDEX, Botcraft::Window::INVENTORY_HOTBAR_START, Botcraft::Window::INVENTORY_HOTBAR_START + 1);
+
+    const std::shared_ptr<Botcraft::InventoryManager> inventory_manager = bot->GetInventoryManager();
+    CHECK(GetItemName(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_HOTBAR_START)) == "minecraft:diamond_pickaxe");
+    CHECK(GetItemName(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_HOTBAR_START + 1)) == "minecraft:stick");
+    CHECK(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_HOTBAR_START + 1).GetItemCount() == 5);
+}
+
+TEST_CASE("drop items")
+{
+    std::unique_ptr<Botcraft::SimpleBehaviourClient> bot = SetupTestBot<Botcraft::SimpleBehaviourClient>();
+
+    CHECK(GiveItem(bot, "minecraft:stick", 5));
+
+    const std::shared_ptr<Botcraft::InventoryManager> inventory_manager = bot->GetInventoryManager();
+    const std::shared_ptr<Botcraft::EntityManager> entity_manager = bot->GetEntityManager();
+    const Botcraft::Vector3<double> position = Botcraft::Vector3<double>(0.5, 0.0, 0.5) + TestManager::GetInstance().GetCurrentOffset();
+
+    SECTION("drop 1")
+    {
+        // Drop 1 stick
+        bot->SyncAction(5000, Botcraft::DropItemsFromContainer, Botcraft::Window::PLAYER_INVENTORY_INDEX, Botcraft::Window::INVENTORY_HOTBAR_START, 4);
+
+        // We still have 4 sticks
+        CHECK(GetItemName(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_HOTBAR_START)) == "minecraft:stick");
+        CHECK(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_HOTBAR_START).GetItemCount() == 4);
+        // There is a stick entity on the floor
+        CHECK(Botcraft::Utilities::WaitForCondition([&]()
+            {
+                auto entities = entity_manager->GetEntities();
+                for (const auto& [id, e] : *entities)
+                {
+                    // If this is an item entity and closer than 3.5 blocks
+                    if (e->GetType() == Botcraft::ItemEntity::GetClassType() &&
+                        e->GetPosition().SqrDist(position) < 12.25)
+                    {
+                        std::shared_ptr<Botcraft::ItemEntity> floor_items = std::dynamic_pointer_cast<Botcraft::ItemEntity>(e);
+                        return
+                            GetItemName(floor_items->GetDataItem()) == "minecraft:stick" &&
+                            floor_items->GetDataItem().GetItemCount() == 1;
+                    }
+                }
+                return false;
+            }, 5000));
+    }
+
+    SECTION("drop all")
+    {
+        // Drop all sticks
+        bot->SyncAction(5000, Botcraft::DropItemsFromContainer, Botcraft::Window::PLAYER_INVENTORY_INDEX, Botcraft::Window::INVENTORY_HOTBAR_START, 0);
+
+        // We have nothing now
+        CHECK(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_HOTBAR_START).IsEmptySlot());
+        // There is a stick entity on the floor
+        CHECK(Botcraft::Utilities::WaitForCondition([&]()
+            {
+                auto entities = entity_manager->GetEntities();
+                for (const auto& [id, e] : *entities)
+                {
+                    // If this is an item entity and closer than 3.5 blocks
+                    if (e->GetType() == Botcraft::ItemEntity::GetClassType() &&
+                        e->GetPosition().SqrDist(position) < 12.25)
+                    {
+                        std::shared_ptr<Botcraft::ItemEntity> floor_items = std::dynamic_pointer_cast<Botcraft::ItemEntity>(e);
+                        return
+                            GetItemName(floor_items->GetDataItem()) == "minecraft:stick" &&
+                            floor_items->GetDataItem().GetItemCount() == 5;
+                    }
+                }
+                return false;
+            }, 5000));
+    }
+}
+
+TEST_CASE("put one item")
+{
+    std::unique_ptr<Botcraft::SimpleBehaviourClient> bot = SetupTestBot<Botcraft::SimpleBehaviourClient>();
+    const std::shared_ptr<Botcraft::InventoryManager> inventory_manager = bot->GetInventoryManager();
+
+    CHECK(GiveItem(bot, "minecraft:stick", 5));
+
+    for (int i = 1; i < 5; ++i)
+    {
+        bot->SyncAction(5000, Botcraft::PutOneItemInContainerSlot, Botcraft::Window::PLAYER_INVENTORY_INDEX, Botcraft::Window::INVENTORY_HOTBAR_START, Botcraft::Window::INVENTORY_HOTBAR_START + i);
+    }
+
+    for (int i = 0; i < 5; ++i)
+    {
+        CHECK(GetItemName(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_HOTBAR_START + i)) == "minecraft:stick");
+        CHECK(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_HOTBAR_START + i).GetItemCount() == 1);
+    }
+}
+
+TEST_CASE("set in hand")
+{
+    std::unique_ptr<Botcraft::SimpleBehaviourClient> bot = SetupTestBot<Botcraft::SimpleBehaviourClient>();
+
+    CHECK(GiveItem(bot, "minecraft:stick", 1));
+    CHECK(GiveItem(bot, "minecraft:diamond_pickaxe", 1));
+
+    SECTION("Name")
+    {
+        bot->SyncAction(5000, Botcraft::SetItemInHand, "minecraft:diamond_pickaxe", Botcraft::Hand::Right);
+    }
+
+    SECTION("Id")
+    {
+        const Botcraft::ItemId pickaxe_id = Botcraft::AssetsManager::getInstance().GetItemID("minecraft:diamond_pickaxe");
+        bot->SyncAction(5000, Botcraft::SetItemIdInHand, pickaxe_id, Botcraft::Hand::Right);
+    }
+
+    const std::shared_ptr<Botcraft::InventoryManager> inventory_manager = bot->GetInventoryManager();
+    {
+        REQUIRE(GetItemName(inventory_manager->GetHotbarSelected()) == "minecraft:diamond_pickaxe");
+    }
+}
+
+TEST_CASE("place block")
+{
+    std::unique_ptr<Botcraft::SimpleBehaviourClient> bot = SetupTestBot<Botcraft::SimpleBehaviourClient>();
+    const std::shared_ptr<Botcraft::World> world = bot->GetWorld();
+
+    CHECK(GiveItem(bot, "minecraft:diamond_block", 1));
+    Botcraft::Position pos;
+
+    SECTION("no mid air")
+    {
+        pos = TestManager::GetInstance().GetCurrentOffset() + Botcraft::Position(1, 0, 1);
+        bot->SyncAction(5000, Botcraft::PlaceBlock, "minecraft:diamond_block", pos, Botcraft::PlayerDiggingFace::Up, true, false, false);
+    }
+    SECTION("mid air")
+    {
+        pos = TestManager::GetInstance().GetCurrentOffset() + Botcraft::Position(1, 1, 1);
+        bot->SyncAction(5000, Botcraft::PlaceBlock, "minecraft:diamond_block", pos, Botcraft::PlayerDiggingFace::Up, true, true, false);
+    }
+    SECTION("automatic face detection")
+    {
+        pos = TestManager::GetInstance().GetCurrentOffset() + Botcraft::Position(1, 0, 1);
+        bot->SyncAction(5000, Botcraft::PlaceBlock, "minecraft:diamond_block", pos, std::nullopt, true, false, false);
+    }
+
+    const Botcraft::Blockstate* block = world->GetBlock(pos);
+    REQUIRE(block != nullptr);
+    REQUIRE(block->GetName() == "minecraft:diamond_block");
+}
+
+TEST_CASE("eat")
+{
+    std::unique_ptr<Botcraft::SimpleBehaviourClient> bot = SetupTestBot<Botcraft::SimpleBehaviourClient>();
+
+    CHECK(GiveItem(bot, "minecraft:golden_apple", 1));
+
+    bot->SyncAction(5000, Botcraft::Eat, "minecraft:golden_apple", true);
+
+    const std::shared_ptr<Botcraft::InventoryManager> inventory_manager = bot->GetInventoryManager();
+    // Check we don't have a golden apple in main or off hand
+    REQUIRE(inventory_manager->GetHotbarSelected().IsEmptySlot());
+    REQUIRE(inventory_manager->GetOffHand().IsEmptySlot());
+}
+
+TEST_CASE("container")
+{
+    std::unique_ptr<Botcraft::SimpleBehaviourClient> bot = SetupTestBot<Botcraft::SimpleBehaviourClient>();
+    const std::shared_ptr<Botcraft::InventoryManager> inventory_manager = bot->GetInventoryManager();
+    const Botcraft::Position chest = TestManager::GetInstance().GetCurrentOffset() + Botcraft::Position(1, 0, 1);
+
+#if PROTOCOL_VERSION == 768 /* 1.21.2/3 */
+    // Bugfix cause minecraft adds an empty "lock" tag to the chest when loading the structure :)
+    MinecraftServer::GetInstance().SendLine("data remove block " + std::to_string(chest.x) + " " + std::to_string(chest.y) + " " + std::to_string(chest.z) + " \"lock\"");
+    MinecraftServer::GetInstance().WaitLine(".*?: Modified block data of .*", 5000);
+#endif
+
+    CHECK(GiveItem(bot, "minecraft:stick", 5));
+
+    bot->SyncAction(5000, Botcraft::OpenContainer, chest);
+    short container_id = inventory_manager->GetFirstOpenedWindowId();
+    std::shared_ptr<Botcraft::Window> container = inventory_manager->GetWindow(container_id);
+    REQUIRE(container_id != -1);
+
+    SECTION("put 1")
+    {
+        bot->SyncAction(5000, Botcraft::PutOneItemInContainerSlot, container_id, container->GetFirstPlayerInventorySlot() + Botcraft::Window::INVENTORY_HOTBAR_START - Botcraft::Window::INVENTORY_STORAGE_START, 0);
+        bot->SyncAction(5000, Botcraft::CloseContainer, container_id);
+#if PROTOCOL_VERSION < 755 /* < 1.17 */
+        // If <1.17 we need to wait for the server to send the
+        // updated player inventory content after closing the container
+        REQUIRE(Botcraft::Utilities::WaitForCondition([&]()
+            {
+                if (GetItemName(inventory_manager->GetHotbarSelected()) == "minecraft:stick" &&
+                    inventory_manager->GetHotbarSelected().GetItemCount() == 4)
+                {
+                    return true;
+                }
+                return false;
+            }, 5000));
+#else
+        REQUIRE(GetItemName(inventory_manager->GetHotbarSelected()) == "minecraft:stick");
+        REQUIRE(inventory_manager->GetHotbarSelected().GetItemCount() == 4);
+#endif
+        container_id = -1;
+        bot->SyncAction(5000, Botcraft::OpenContainer, chest);
+        container_id = inventory_manager->GetFirstOpenedWindowId();
+        container = inventory_manager->GetWindow(container_id);
+        REQUIRE(container_id != -1);
+        REQUIRE(GetItemName(container->GetSlot(0)) == "minecraft:stick");
+        REQUIRE(container->GetSlot(0).GetItemCount() == 1);
+    }
+    SECTION("put all")
+    {
+        bot->SyncAction(5000, Botcraft::SwapItemsInContainer, container_id, container->GetFirstPlayerInventorySlot() + Botcraft::Window::INVENTORY_HOTBAR_START - Botcraft::Window::INVENTORY_STORAGE_START, 0);
+        bot->SyncAction(5000, Botcraft::CloseContainer, container_id);
+#if PROTOCOL_VERSION < 755 /* < 1.17 */
+        // If <1.17 we need to wait for the server to send the
+        // updated player inventory content after closing the container
+        REQUIRE(Botcraft::Utilities::WaitForCondition([&]()
+            {
+                if (inventory_manager->GetHotbarSelected().IsEmptySlot())
+                {
+                    return true;
+                }
+                return false;
+            }, 5000));
+#else
+        REQUIRE(inventory_manager->GetHotbarSelected().IsEmptySlot());
+#endif
+        container_id = -1;
+        bot->SyncAction(5000, Botcraft::OpenContainer, chest);
+        container_id = inventory_manager->GetFirstOpenedWindowId();
+        container = inventory_manager->GetWindow(container_id);
+        REQUIRE(container_id != -1);
+        REQUIRE(GetItemName(container->GetSlot(0)) == "minecraft:stick");
+        REQUIRE(container->GetSlot(0).GetItemCount() == 5);
+    }
+
+    bot->SyncAction(5000, Botcraft::CloseContainer, container_id);
+    REQUIRE(inventory_manager->GetFirstOpenedWindowId() == -1);
+}
+
+#if PROTOCOL_VERSION > 451 /* > 1.13.2 */
+TEST_CASE("trade")
+{
+    std::unique_ptr<Botcraft::SimpleBehaviourClient> bot = SetupTestBot<Botcraft::SimpleBehaviourClient>();
+    const std::shared_ptr<Botcraft::InventoryManager> inventory_manager = bot->GetInventoryManager();
+    const std::shared_ptr<Botcraft::EntityManager> entity_manager = bot->GetEntityManager();
+
+    const Botcraft::Vector3<double> pos = Botcraft::Vector3<double>(1.5, 0, 1.5) + TestManager::GetInstance().GetCurrentOffset();
+
+    std::shared_ptr<Botcraft::Entity> entity;
+    REQUIRE(Botcraft::Utilities::WaitForCondition([&]()
+        {
+            auto entities = entity_manager->GetEntities();
+            for (const auto& [k, v] : *entities)
+            {
+                if (v->GetPosition().SqrDist(pos) < 0.2 &&
+                    v->GetType() == Botcraft::VillagerEntity::GetClassType())
+                {
+                    entity = v;
+                    return true;
+                }
+            }
+            return false;
+        }, 5000));
+    REQUIRE(entity != nullptr);
+    REQUIRE(GiveItem(bot, "minecraft:stick", 1));
+
+    bot->SyncAction(5000, Botcraft::InteractEntity, entity->GetEntityID(), Botcraft::Hand::Right, true);
+    bot->SyncAction(5000, Botcraft::TradeName, "minecraft:stick", false, -1);
+    bot->SyncAction(5000, Botcraft::TradeName, "minecraft:enchanted_book", true, -1);
+    bot->SyncAction(5000, Botcraft::CloseContainer, -1);
+
+    // Wait for the player inventory to update
+    CHECK(Botcraft::Utilities::WaitForCondition([&]()
+        {
+            return !inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_STORAGE_START).IsEmptySlot();
+        }, 5000));
+
+    bot->SyncAction(5000, Botcraft::SetItemInHand, "minecraft:enchanted_book", Botcraft::Hand::Right);
+    REQUIRE(GetItemName(inventory_manager->GetHotbarSelected()) == "minecraft:enchanted_book");
+    REQUIRE(inventory_manager->GetHotbarSelected().GetItemCount() == 1);
+}
+#endif
+
+TEST_CASE("craft#diamond")
+{
+    std::unique_ptr<Botcraft::SimpleBehaviourClient> bot = SetupTestBot<Botcraft::SimpleBehaviourClient>();
+    const std::shared_ptr<Botcraft::InventoryManager> inventory_manager = bot->GetInventoryManager();
+    const Botcraft::Position table = TestManager::GetInstance().GetCurrentOffset() + Botcraft::Position(1, 0, 1);
+
+    CHECK(GiveItem(bot, "minecraft:diamond_block", 1));
+
+    const std::array<std::string, 3> empty = { "", "", "" };
+    const std::array<std::array<std::string, 3>, 3> decraft_recipe = {
+        empty,
+        empty,
+        {"minecraft:diamond_block", "", ""}
+    };
+
+    bot->SyncAction(5000, Botcraft::CraftNamed, decraft_recipe, true);
+    REQUIRE(GetItemName(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_STORAGE_START)) == "minecraft:diamond");
+    REQUIRE(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_STORAGE_START).GetItemCount() == 9);
+
+    bot->SyncAction(5000, Botcraft::OpenContainer, table);
+    short container_id = inventory_manager->GetFirstOpenedWindowId();
+    std::shared_ptr<Botcraft::Window> container = inventory_manager->GetWindow(container_id);
+
+    REQUIRE(container_id != -1);
+
+    const std::array<std::string, 3> diamond_line = { "minecraft:diamond", "minecraft:diamond", "minecraft:diamond" };
+    const std::array<std::array<std::string, 3>, 3> craft_recipe = {
+        diamond_line,
+        diamond_line,
+        diamond_line
+    };
+
+    bot->SyncAction(5000, Botcraft::CraftNamed, craft_recipe, false);
+    bot->SyncAction(5000, Botcraft::CloseContainer, -1);
+#if PROTOCOL_VERSION < 755 /* < 1.17 */
+    // If <1.17 we need to wait for the server to send the
+    // updated player inventory content after closing the container
+    REQUIRE(Botcraft::Utilities::WaitForCondition([&]()
+        {
+            if (GetItemName(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_STORAGE_START)) == "minecraft:diamond_block" &&
+                inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_STORAGE_START).GetItemCount() == 1)
+            {
+                return true;
+            }
+            return false;
+        }, 5000));
+#else
+    REQUIRE(GetItemName(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_STORAGE_START)) == "minecraft:diamond_block");
+    REQUIRE(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_STORAGE_START).GetItemCount() == 1);
+#endif
+}
+
+TEST_CASE("craft#wooden_pickaxe")
+{
+    std::unique_ptr<Botcraft::SimpleBehaviourClient> bot = SetupTestBot<Botcraft::SimpleBehaviourClient>();
+    const std::shared_ptr<Botcraft::InventoryManager> inventory_manager = bot->GetInventoryManager();
+    const Botcraft::Position table = TestManager::GetInstance().GetCurrentOffset() + Botcraft::Position(1, 0, 1);
+
+    CHECK(GiveItem(bot, "minecraft:oak_planks", 3));
+    CHECK(GiveItem(bot, "minecraft:stick", 2));
+
+    const Botcraft::AssetsManager& assets_manager = Botcraft::AssetsManager::getInstance();
+
+#if PROTOCOL_VERSION < 347 /* < 1.13 */
+    const Botcraft::ItemId empty_id = { -1, 0 };
+#else
+    const Botcraft::ItemId empty_id = -1;
+#endif
+
+    std::array<std::array<Botcraft::ItemId, 3>, 3> decraft_recipe;
+    decraft_recipe[0] = { assets_manager.GetItemID("minecraft:oak_planks"), assets_manager.GetItemID("minecraft:oak_planks"), assets_manager.GetItemID("minecraft:oak_planks") };
+    decraft_recipe[1] = { empty_id, assets_manager.GetItemID("minecraft:stick"), assets_manager.GetItemID("minecraft:air") };
+    decraft_recipe[2] = { assets_manager.GetItemID("minecraft:air"), assets_manager.GetItemID("minecraft:stick"), empty_id };
+
+    bot->SyncAction(5000, Botcraft::OpenContainer, table);
+    short container_id = inventory_manager->GetFirstOpenedWindowId();
+    std::shared_ptr<Botcraft::Window> container = inventory_manager->GetWindow(container_id);
+
+    REQUIRE(container_id != -1);
+
+    bot->SyncAction(5000, Botcraft::Craft, decraft_recipe, true);
+    bot->SyncAction(5000, Botcraft::CloseContainer, -1);
+    // If <1.17 we need to wait for the server to send the
+    // updated player inventory content after closing the container
+#if PROTOCOL_VERSION < 755 /* < 1.17 */
+    REQUIRE(Botcraft::Utilities::WaitForCondition([&]() {
+        if (GetItemName(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_STORAGE_START)) == "minecraft:wooden_pickaxe" &&
+            inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_STORAGE_START).GetItemCount() == 1)
+        {
+            return true;
+        }
+        return false;
+    }, 5000));
+#else
+    REQUIRE(GetItemName(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_STORAGE_START)) == "minecraft:wooden_pickaxe");
+    REQUIRE(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_STORAGE_START).GetItemCount() == 1);
+#endif
+}
+
+TEST_CASE("sort inventory")
+{
+    std::unique_ptr<Botcraft::SimpleBehaviourClient> bot = SetupTestBot<Botcraft::SimpleBehaviourClient>();
+    const std::shared_ptr<Botcraft::InventoryManager> inventory_manager = bot->GetInventoryManager();
+
+    CHECK(GiveItem(bot, "minecraft:stick", 5));
+
+    for (int i = 1; i < 5; ++i)
+    {
+        bot->SyncAction(5000, Botcraft::PutOneItemInContainerSlot, Botcraft::Window::PLAYER_INVENTORY_INDEX, Botcraft::Window::INVENTORY_HOTBAR_START, Botcraft::Window::INVENTORY_HOTBAR_START + i);
+    }
+
+    bot->SyncAction(5000, Botcraft::SortInventory);
+
+    CHECK(GetItemName(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_HOTBAR_START)) == "minecraft:stick");
+    CHECK(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_HOTBAR_START).GetItemCount() == 5);
+
+    for (int i = 1; i < 5; ++i)
+    {
+        CHECK(inventory_manager->GetPlayerInventory()->GetSlot(Botcraft::Window::INVENTORY_HOTBAR_START + i).IsEmptySlot());
+    }
+}
