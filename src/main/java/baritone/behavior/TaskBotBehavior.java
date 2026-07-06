@@ -202,6 +202,8 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private int clearBoxNoPathSkips;
     private long nativeClearAreaLastRefreshAt;
     private boolean nativeClearAreaRecovering;
+    private BlockPos nativeClearAreaLastRetarget;
+    private BlockPos nativeClearAreaRetargetOrigin;
     private boolean clearBoxBreakSnapshotReady;
     private BlockPos pendingNativeClearMin;
     private BlockPos pendingNativeClearMax;
@@ -468,6 +470,17 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         if (target == null) {
             return false;
         }
+        BlockPos feet = ctx.playerFeet();
+        if (target.equals(nativeClearAreaLastRetarget)
+                && nativeClearAreaRetargetOrigin != null
+                && feet.distSqr(nativeClearAreaRetargetOrigin) <= 4.0D) {
+            nativeClearAreaLastRetarget = null;
+            nativeClearAreaRetargetOrigin = null;
+            logDirect("TaskBot: repeated native cleararea retarget failed at " + target + "; refreshing cleararea instead.");
+            return false;
+        }
+        nativeClearAreaLastRetarget = target.immutable();
+        nativeClearAreaRetargetOrigin = feet.immutable();
         Baritone.settings().allowBreak.value = true;
         Baritone.settings().allowPlace.value = false;
         baritone.getCommandManager().execute("goto " + target.getX() + " " + target.getY() + " " + target.getZ());
@@ -621,6 +634,8 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         baritone.getCommandManager().execute("sel pos2 " + allowedBreakMax.getX() + " " + allowedBreakMax.getY() + " " + allowedBreakMax.getZ());
         baritone.getCommandManager().execute("sel cleararea");
         nativeClearAreaLastRefreshAt = System.currentTimeMillis();
+        nativeClearAreaLastRetarget = null;
+        nativeClearAreaRetargetOrigin = null;
         logDirect("TaskBot: refreshed native Baritone cleararea (" + reason + ") " + allowedBreakMin + " -> " + allowedBreakMax + ".");
     }
 
@@ -863,6 +878,8 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         previousAllowPlace = null;
         nativeClearAreaRecovering = false;
         nativeClearAreaLastRefreshAt = 0L;
+        nativeClearAreaLastRetarget = null;
+        nativeClearAreaRetargetOrigin = null;
         clearAllowedBreakCuboid();
         Baritone.settings().allowBreak.value = false;
         Baritone.settings().allowPlace.value = false;
@@ -1519,6 +1536,8 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         beginBreakingTask();
         Baritone.settings().allowPlace.value = false;
         nativeClearAreaRecovering = false;
+        nativeClearAreaLastRetarget = null;
+        nativeClearAreaRetargetOrigin = null;
         baritone.getPathingBehavior().cancelEverything();
         baritone.getCommandManager().execute("stop");
         baritone.getCommandManager().execute("sel clear");
