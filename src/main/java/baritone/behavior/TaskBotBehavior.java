@@ -482,7 +482,8 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         nativeClearAreaLastRetarget = target.immutable();
         nativeClearAreaRetargetOrigin = feet.immutable();
         Baritone.settings().allowBreak.value = true;
-        Baritone.settings().allowPlace.value = false;
+        Baritone.settings().allowPlace.value = true;
+        Baritone.settings().buildOnlySelection.value = true;
         baritone.getCommandManager().execute("goto " + target.getX() + " " + target.getY() + " " + target.getZ());
         logDirect("TaskBot: retargeting nearest approved stand position " + target + ".");
         return true;
@@ -626,7 +627,8 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             return;
         }
         Baritone.settings().allowBreak.value = true;
-        Baritone.settings().allowPlace.value = false;
+        Baritone.settings().allowPlace.value = true;
+        Baritone.settings().buildOnlySelection.value = true;
         baritone.getPathingBehavior().cancelEverything();
         baritone.getCommandManager().execute("stop");
         baritone.getCommandManager().execute("sel clear");
@@ -883,6 +885,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         clearAllowedBreakCuboid();
         Baritone.settings().allowBreak.value = false;
         Baritone.settings().allowPlace.value = false;
+        Baritone.settings().buildOnlySelection.value = false;
         baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_LEFT, false);
         baritone.getPathingBehavior().cancelEverything();
     }
@@ -1534,7 +1537,8 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         }
         clearBoxBreakSnapshotReady = true;
         beginBreakingTask();
-        Baritone.settings().allowPlace.value = false;
+        Baritone.settings().allowPlace.value = true;
+        Baritone.settings().buildOnlySelection.value = true;
         nativeClearAreaRecovering = false;
         nativeClearAreaLastRetarget = null;
         nativeClearAreaRetargetOrigin = null;
