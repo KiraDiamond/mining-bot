@@ -208,6 +208,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private int clearBoxBlockedReports;
     private int clearBoxNoPathSkips;
     private long nativeClearAreaLastRefreshAt;
+    private int nativeClearAreaIdleRefreshes;
     private boolean nativeClearAreaRecovering;
     private boolean clearBoxBreakSnapshotReady;
     private BlockPos pendingNativeClearMin;
@@ -423,6 +424,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             forceSafeIdle();
             nativeClearAreaRecovering = false;
             nativeClearAreaLastRefreshAt = 0L;
+            nativeClearAreaIdleRefreshes = 0;
             return;
         }
         BlockPos feet = ctx.playerFeet();
@@ -458,13 +460,44 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         }
         boolean noSelectedBlock = ctx.getSelectedBlock().isEmpty();
         boolean noPath = !baritone.getPathingBehavior().isPathing();
+        if (!noSelectedBlock || !noPath) {
+            nativeClearAreaIdleRefreshes = 0;
+        }
         if (noSelectedBlock && noPath && handleNativeClearAreaDirectBreak()) {
             nativeClearAreaLastRefreshAt = System.currentTimeMillis();
+            nativeClearAreaIdleRefreshes = 0;
             return;
         }
         if (noSelectedBlock && noPath && System.currentTimeMillis() - nativeClearAreaLastRefreshAt >= 20_000L) {
-            refreshNativeClearArea("Baritone idle with blocks remaining");
+            nativeClearAreaIdleRefreshes++;
+            if (nativeClearAreaIdleRefreshes >= 2) {
+                promoteNativeClearAreaToDirectClearBox();
+            } else {
+                refreshNativeClearArea("Baritone idle with blocks remaining");
+            }
         }
+    }
+
+    private void promoteNativeClearAreaToDirectClearBox() {
+        if (allowedBreakMin == null || allowedBreakMax == null || allowedBreakPositions.isEmpty()) {
+            return;
+        }
+        BlockPos min = allowedBreakMin;
+        BlockPos max = allowedBreakMax;
+        baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_LEFT, false);
+        baritone.getPathingBehavior().cancelEverything();
+        baritone.getCommandManager().execute("stop");
+        clearCurrentClearBoxState();
+        clearBoxMin = min;
+        clearBoxMax = max;
+        clearBoxLastActivityFeet = ctx.playerFeet().immutable();
+        clearBoxLastActivityAt = System.currentTimeMillis();
+        clearBoxBreakSnapshotReady = true;
+        nativeClearAreaLastRefreshAt = System.currentTimeMillis();
+        nativeClearAreaIdleRefreshes = 0;
+        beginBreakingTask();
+        Baritone.settings().allowPlace.value = false;
+        logDirect("TaskBot: native cleararea idle; switching to direct snapshot miner for " + min + " -> " + max + " with " + allowedBreakPositions.size() + " approved block(s).");
     }
 
     private void addRecoveryColumn(BlockPos feet) {
@@ -1554,6 +1587,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         clearBoxBlockedReports = 0;
         clearBoxNoPathSkips = 0;
         clearBoxBreakSnapshotReady = false;
+        nativeClearAreaIdleRefreshes = 0;
         setAllowedBreakCuboid(min, max);
         buildAllowedBreakSnapshot();
         if (allowedBreakPositions.isEmpty()) {
@@ -1565,6 +1599,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         beginBreakingTask();
         Baritone.settings().allowPlace.value = false;
         nativeClearAreaRecovering = false;
+        nativeClearAreaIdleRefreshes = 0;
         baritone.getPathingBehavior().cancelEverything();
         baritone.getCommandManager().execute("stop");
         baritone.getCommandManager().execute("sel clear");
@@ -1591,6 +1626,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         clearBoxNoPathSkips = 0;
         clearBoxBreakSnapshotReady = false;
         nativeClearAreaRecovering = false;
+        nativeClearAreaIdleRefreshes = 0;
     }
 
     private void stopClearBox() {
