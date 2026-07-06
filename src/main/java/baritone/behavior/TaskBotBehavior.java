@@ -204,6 +204,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private boolean nativeClearAreaRecovering;
     private BlockPos nativeClearAreaLastRetarget;
     private BlockPos nativeClearAreaRetargetOrigin;
+    private final Set<BlockPos> nativeClearAreaSkippedRetargets = new HashSet<>();
     private boolean clearBoxBreakSnapshotReady;
     private BlockPos pendingNativeClearMin;
     private BlockPos pendingNativeClearMax;
@@ -474,6 +475,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         if (target.equals(nativeClearAreaLastRetarget)
                 && nativeClearAreaRetargetOrigin != null
                 && feet.distSqr(nativeClearAreaRetargetOrigin) <= 4.0D) {
+            nativeClearAreaSkippedRetargets.add(target.immutable());
             nativeClearAreaLastRetarget = null;
             nativeClearAreaRetargetOrigin = null;
             logDirect("TaskBot: repeated native cleararea retarget failed at " + target + "; refreshing cleararea instead.");
@@ -499,6 +501,9 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             }
             for (Direction direction : Direction.values()) {
                 BlockPos stand = pos.relative(direction);
+                if (nativeClearAreaSkippedRetargets.contains(stand.immutable())) {
+                    continue;
+                }
                 if (!canStandAt(stand)) {
                     continue;
                 }
@@ -882,6 +887,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         nativeClearAreaLastRefreshAt = 0L;
         nativeClearAreaLastRetarget = null;
         nativeClearAreaRetargetOrigin = null;
+        nativeClearAreaSkippedRetargets.clear();
         clearAllowedBreakCuboid();
         Baritone.settings().allowBreak.value = false;
         Baritone.settings().allowPlace.value = false;
@@ -1542,6 +1548,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         nativeClearAreaRecovering = false;
         nativeClearAreaLastRetarget = null;
         nativeClearAreaRetargetOrigin = null;
+        nativeClearAreaSkippedRetargets.clear();
         baritone.getPathingBehavior().cancelEverything();
         baritone.getCommandManager().execute("stop");
         baritone.getCommandManager().execute("sel clear");
