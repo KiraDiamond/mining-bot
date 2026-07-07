@@ -80,6 +80,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private static final int ACTION_COOLDOWN_TICKS = 20;
     private static final int FULL_INVENTORY_CHECK_TICKS = 40;
     private static final long CLEARBOX_INACTIVITY_REMINDER_MS = 120_000L;
+    private static final long NATIVE_CLEARAREA_NO_SELECTION_PROMOTE_MS = 45_000L;
     private static final Pattern SET_SPAWN_COMMAND = Pattern.compile("^setspawn\\s+(-?\\d+)\\s+(-?\\d+)\\s+(-?\\d+)$");
     private static final Pattern CLEARBOX_COMMAND = Pattern.compile("^clearbox\\s+(-?\\d+)\\s+(-?\\d+)\\s+(-?\\d+)\\s+(-?\\d+)\\s+(-?\\d+)\\s+(-?\\d+)$");
     private static BlockPos allowedBreakMin;
@@ -208,6 +209,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private int clearBoxBlockedReports;
     private int clearBoxNoPathSkips;
     private long nativeClearAreaLastRefreshAt;
+    private long nativeClearAreaNoSelectionSince;
     private int nativeClearAreaIdleRefreshes;
     private boolean nativeClearAreaRecovering;
     private boolean clearBoxBreakSnapshotReady;
@@ -424,6 +426,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             forceSafeIdle();
             nativeClearAreaRecovering = false;
             nativeClearAreaLastRefreshAt = 0L;
+            nativeClearAreaNoSelectionSince = 0L;
             nativeClearAreaIdleRefreshes = 0;
             return;
         }
@@ -460,12 +463,22 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         }
         boolean noSelectedBlock = ctx.getSelectedBlock().isEmpty();
         boolean noPath = !baritone.getPathingBehavior().isPathing();
-        if (!noSelectedBlock || !noPath) {
+        if (noSelectedBlock) {
+            if (nativeClearAreaNoSelectionSince == 0L) {
+                nativeClearAreaNoSelectionSince = System.currentTimeMillis();
+            }
+        } else {
+            nativeClearAreaNoSelectionSince = 0L;
             nativeClearAreaIdleRefreshes = 0;
         }
         if (noSelectedBlock && noPath && handleNativeClearAreaDirectBreak()) {
             nativeClearAreaLastRefreshAt = System.currentTimeMillis();
+            nativeClearAreaNoSelectionSince = 0L;
             nativeClearAreaIdleRefreshes = 0;
+            return;
+        }
+        if (noSelectedBlock && System.currentTimeMillis() - nativeClearAreaNoSelectionSince >= NATIVE_CLEARAREA_NO_SELECTION_PROMOTE_MS) {
+            promoteNativeClearAreaToDirectClearBox();
             return;
         }
         if (noSelectedBlock && noPath && System.currentTimeMillis() - nativeClearAreaLastRefreshAt >= 20_000L) {
@@ -494,6 +507,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         clearBoxLastActivityAt = System.currentTimeMillis();
         clearBoxBreakSnapshotReady = true;
         nativeClearAreaLastRefreshAt = System.currentTimeMillis();
+        nativeClearAreaNoSelectionSince = 0L;
         nativeClearAreaIdleRefreshes = 0;
         beginBreakingTask();
         Baritone.settings().allowPlace.value = false;
@@ -1599,6 +1613,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         beginBreakingTask();
         Baritone.settings().allowPlace.value = false;
         nativeClearAreaRecovering = false;
+        nativeClearAreaNoSelectionSince = 0L;
         nativeClearAreaIdleRefreshes = 0;
         baritone.getPathingBehavior().cancelEverything();
         baritone.getCommandManager().execute("stop");
@@ -1626,6 +1641,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         clearBoxNoPathSkips = 0;
         clearBoxBreakSnapshotReady = false;
         nativeClearAreaRecovering = false;
+        nativeClearAreaNoSelectionSince = 0L;
         nativeClearAreaIdleRefreshes = 0;
     }
 
@@ -1841,7 +1857,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         int dx = Math.max(0, Math.max(clearBoxMin.getX() - feet.getX(), feet.getX() - clearBoxMax.getX()));
         int dz = Math.max(0, Math.max(clearBoxMin.getZ() - feet.getZ(), feet.getZ() - clearBoxMax.getZ()));
         if (Math.max(dx, dz) > 12 && feet.getY() > clearBoxMax.getY() + 8) {
-            return new BlockPos(centerX, feet.getY(), centerZ);
+            return new BlockPos(centerX, clearBoxMax.getY() + 1, centerZ);
         }
         return new BlockPos(
                 centerX,
