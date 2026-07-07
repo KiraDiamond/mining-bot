@@ -43,6 +43,7 @@ import net.minecraft.world.item.BedItem;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.FireworkRocketItem;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.PickaxeItem;
 import net.minecraft.world.item.ShovelItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -79,6 +80,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private static final long DAY_END = 12000L;
     private static final int ACTION_COOLDOWN_TICKS = 20;
     private static final int FULL_INVENTORY_CHECK_TICKS = 40;
+    private static final int NO_PICKAXE_MIN_FREE_SLOTS = 3;
     private static final long CLEARBOX_INACTIVITY_REMINDER_MS = 120_000L;
     private static final long NATIVE_CLEARAREA_NO_SELECTION_PROMOTE_MS = 45_000L;
     private static final boolean NATIVE_ONLY_CLEARAREA = true;
@@ -225,6 +227,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private long clearBoxLastActivityAt;
     private int clearBoxGotoCooldown;
     private int clearBoxLogCooldown;
+    private int noPickaxeSlotCooldown;
     private int clearBoxBlockedReports;
     private int clearBoxNoPathSkips;
     private BlockPos miningUnstickFeet;
@@ -391,12 +394,16 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         if (miningUnstickCooldown > 0) {
             miningUnstickCooldown--;
         }
+        if (noPickaxeSlotCooldown > 0) {
+            noPickaxeSlotCooldown--;
+        }
 
         if (!NATIVE_ONLY_CLEARAREA) {
             handleMiningUnstick();
         }
         pollCommandFile();
         monitorPendingNativeClearArea();
+        keepSlotsClearWithoutPickaxe();
         if (NATIVE_ONLY_CLEARAREA) {
             return;
         }
@@ -2477,6 +2484,74 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             }
         }
         return dropped;
+    }
+
+    private void keepSlotsClearWithoutPickaxe() {
+        if (noPickaxeSlotCooldown > 0 || !isActiveMiningTask() || hasUsablePickaxe()) {
+            return;
+        }
+        noPickaxeSlotCooldown = FULL_INVENTORY_CHECK_TICKS;
+        int needed = NO_PICKAXE_MIN_FREE_SLOTS - emptyInventorySlots();
+        if (needed <= 0) {
+            return;
+        }
+        int dropped = dropEmergencyMiningClutter(needed);
+        if (dropped > 0) {
+            logDirect("TaskBot: no usable pickaxe found; dropped " + dropped + " stack(s) to keep "
+                    + NO_PICKAXE_MIN_FREE_SLOTS + " inventory slots clear.");
+        }
+    }
+
+    private boolean hasUsablePickaxe() {
+        NonNullList<ItemStack> inv = ctx.player().getInventory().getNonEquipmentItems();
+        for (ItemStack stack : inv) {
+            if (isUsablePickaxe(stack)) {
+                return true;
+            }
+        }
+        return isUsablePickaxe(ctx.player().getMainHandItem()) || isUsablePickaxe(ctx.player().getOffhandItem());
+    }
+
+    private boolean isUsablePickaxe(ItemStack stack) {
+        return !stack.isEmpty()
+                && stack.getItem() instanceof PickaxeItem
+                && (!stack.isDamageableItem() || durabilityLeft(stack) > TOOL_DURABILITY_THRESHOLD);
+    }
+
+    private int emptyInventorySlots() {
+        int empty = 0;
+        NonNullList<ItemStack> inv = ctx.player().getInventory().getNonEquipmentItems();
+        for (ItemStack stack : inv) {
+            if (stack.isEmpty()) {
+                empty++;
+            }
+        }
+        return empty;
+    }
+
+    private int dropEmergencyMiningClutter(int maxStacks) {
+        if (!(ctx.player().containerMenu instanceof InventoryMenu)) {
+            return 0;
+        }
+        int dropped = 0;
+        NonNullList<ItemStack> inv = ctx.player().getInventory().getNonEquipmentItems();
+        for (int i = 0; i < inv.size() && dropped < maxStacks; i++) {
+            ItemStack stack = inv.get(i);
+            if (!stack.isEmpty() && shouldDropForNoPickaxeSpace(stack)) {
+                int slotId = i < 9 ? i + 36 : i;
+                ctx.playerController().windowClick(ctx.player().inventoryMenu.containerId, slotId, 1, ContainerInput.THROW, ctx.player());
+                dropped++;
+            }
+        }
+        return dropped;
+    }
+
+    private boolean shouldDropForNoPickaxeSpace(ItemStack stack) {
+        if (stack.isEmpty() || shouldKeep(stack)) {
+            return false;
+        }
+        Item item = stack.getItem();
+        return isDropFiller(item) || item instanceof BlockItem;
     }
 
     private boolean shouldDropForMiningOverflow(ItemStack stack) {
