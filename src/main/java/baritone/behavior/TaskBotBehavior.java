@@ -966,9 +966,8 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             previousAllowBreak = Baritone.settings().allowBreak.value;
             previousAllowPlace = Baritone.settings().allowPlace.value;
         }
-        // Once a snapshot exists, pathing may break only the exact pre-approved blocks.
-        // Movement/CalculationContext still hard-block every other solid block.
-        Baritone.settings().allowBreak.value = clearBoxBreakSnapshotReady;
+        // Goto/travel tasks must never mine; cleararea re-enables breaking explicitly.
+        Baritone.settings().allowBreak.value = false;
         Baritone.settings().allowPlace.value = false;
     }
 
