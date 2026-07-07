@@ -1735,10 +1735,19 @@ public final class TaskBotBehavior extends Behavior implements Helper {
                 && !baritone.getPathingBehavior().isPathing()
                 && System.currentTimeMillis() - clearBoxLastActivityAt >= 8_000L) {
             if (clearBoxLastStandTarget.distSqr(feet) > 2.0D) {
+                clearBoxNoPathSkips++;
+                logDirect("TaskBot: native clearbox path stalled before reaching stand " + clearBoxLastStandTarget + " for " + clearBoxTarget + "; skipping target.");
+                if (clearBoxNoPathSkips >= 16) {
+                    logDirect("TaskBot: native clearbox blocked; 16 stand paths stalled from " + ctx.playerFeet() + " without breaking outside " + clearBoxMin + " -> " + clearBoxMax + ". Stopping safe.");
+                    stopClearBox();
+                    return false;
+                }
+                clearBoxSkippedTargets.add(clearBoxTarget.immutable());
+                clearBoxSkipOrigin = ctx.playerFeet().immutable();
+                clearBoxTarget = null;
                 clearBoxLastGotoTarget = null;
                 clearBoxGotoCooldown = 0;
-                markClearBoxActivity();
-                logDirect("TaskBot: native clearbox path stalled before reaching stand " + clearBoxLastStandTarget + " for " + clearBoxTarget + "; retrying path.");
+                clearBoxLastStandTarget = null;
                 return true;
             }
             clearBoxNoPathSkips++;
