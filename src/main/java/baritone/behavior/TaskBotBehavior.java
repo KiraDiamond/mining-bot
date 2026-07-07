@@ -209,6 +209,11 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private int clearBoxLogCooldown;
     private int clearBoxBlockedReports;
     private int clearBoxNoPathSkips;
+    private BlockPos miningUnstickFeet;
+    private long miningUnstickLastMoveAt;
+    private int miningUnstickTicks;
+    private int miningUnstickCooldown;
+    private boolean miningUnstickRight;
     private long nativeClearAreaLastRefreshAt;
     private long nativeClearAreaNoSelectionSince;
     private int nativeClearAreaIdleRefreshes;
@@ -363,7 +368,11 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         if (clearBoxLogCooldown > 0) {
             clearBoxLogCooldown--;
         }
+        if (miningUnstickCooldown > 0) {
+            miningUnstickCooldown--;
+        }
 
+        handleMiningUnstick();
         pollCommandFile();
         monitorPendingNativeClearArea();
         monitorNativeClearAreaCompletion();
@@ -1602,6 +1611,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         clearBoxLogCooldown = 0;
         clearBoxBlockedReports = 0;
         clearBoxNoPathSkips = 0;
+        clearMiningUnstick();
         clearBoxBreakSnapshotReady = false;
         nativeClearAreaIdleRefreshes = 0;
         setAllowedBreakCuboid(min, max);
@@ -1642,6 +1652,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         clearBoxLogCooldown = 0;
         clearBoxBlockedReports = 0;
         clearBoxNoPathSkips = 0;
+        clearMiningUnstick();
         clearBoxBreakSnapshotReady = false;
         nativeClearAreaRecovering = false;
         nativeClearAreaNoSelectionSince = 0L;
@@ -1857,6 +1868,58 @@ public final class TaskBotBehavior extends Behavior implements Helper {
 
     private void markClearBoxActivity() {
         clearBoxLastActivityAt = System.currentTimeMillis();
+    }
+
+    private void handleMiningUnstick() {
+        boolean taskActive = clearBoxMin != null || hasTaskBreakSnapshot() || pendingNativeClearMin != null;
+        if (!taskActive) {
+            clearMiningUnstick();
+            return;
+        }
+        if (baritone.getInputOverrideHandler().isInputForcedDown(Input.CLICK_LEFT)) {
+            miningUnstickFeet = ctx.playerFeet().immutable();
+            miningUnstickLastMoveAt = System.currentTimeMillis();
+            return;
+        }
+        if (miningUnstickTicks > 0) {
+            baritone.getInputOverrideHandler().setInputForceState(Input.MOVE_FORWARD, true);
+            baritone.getInputOverrideHandler().setInputForceState(Input.JUMP, true);
+            baritone.getInputOverrideHandler().setInputForceState(Input.MOVE_RIGHT, miningUnstickRight);
+            baritone.getInputOverrideHandler().setInputForceState(Input.MOVE_LEFT, !miningUnstickRight);
+            miningUnstickTicks--;
+            if (miningUnstickTicks == 0) {
+                releaseMiningUnstickInputs();
+            }
+            return;
+        }
+        BlockPos feet = ctx.playerFeet();
+        if (miningUnstickFeet == null || !miningUnstickFeet.equals(feet)) {
+            miningUnstickFeet = feet.immutable();
+            miningUnstickLastMoveAt = System.currentTimeMillis();
+            return;
+        }
+        if (miningUnstickCooldown == 0 && System.currentTimeMillis() - miningUnstickLastMoveAt >= 8_000L) {
+            miningUnstickTicks = 12;
+            miningUnstickCooldown = ACTION_COOLDOWN_TICKS * 4;
+            miningUnstickRight = !miningUnstickRight;
+            miningUnstickLastMoveAt = System.currentTimeMillis();
+            logDirect("TaskBot: mining task position stalled at " + feet + "; nudging movement.");
+        }
+    }
+
+    private void clearMiningUnstick() {
+        releaseMiningUnstickInputs();
+        miningUnstickFeet = null;
+        miningUnstickLastMoveAt = 0L;
+        miningUnstickTicks = 0;
+        miningUnstickCooldown = 0;
+    }
+
+    private void releaseMiningUnstickInputs() {
+        baritone.getInputOverrideHandler().setInputForceState(Input.MOVE_FORWARD, false);
+        baritone.getInputOverrideHandler().setInputForceState(Input.JUMP, false);
+        baritone.getInputOverrideHandler().setInputForceState(Input.MOVE_LEFT, false);
+        baritone.getInputOverrideHandler().setInputForceState(Input.MOVE_RIGHT, false);
     }
 
     private boolean shouldIssueClearBoxGoto(BlockPos gotoTarget) {
