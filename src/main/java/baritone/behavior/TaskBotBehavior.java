@@ -81,6 +81,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private static final int FULL_INVENTORY_CHECK_TICKS = 40;
     private static final long CLEARBOX_INACTIVITY_REMINDER_MS = 120_000L;
     private static final long NATIVE_CLEARAREA_NO_SELECTION_PROMOTE_MS = 45_000L;
+    private static final boolean NATIVE_ONLY_CLEARAREA = true;
     private static final Pattern SET_SPAWN_COMMAND = Pattern.compile("^setspawn\\s+(-?\\d+)\\s+(-?\\d+)\\s+(-?\\d+)$");
     private static final Pattern CLEARBOX_COMMAND = Pattern.compile("^clearbox\\s+(-?\\d+)\\s+(-?\\d+)\\s+(-?\\d+)\\s+(-?\\d+)\\s+(-?\\d+)\\s+(-?\\d+)$");
     private static BlockPos allowedBreakMin;
@@ -92,6 +93,10 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             return false;
         }
         return allowedBreakPositions.contains(pos.immutable());
+    }
+
+    public static boolean bypassTaskBreakGate() {
+        return NATIVE_ONLY_CLEARAREA;
     }
 
     public static boolean hasTaskBreakSnapshot() {
@@ -226,7 +231,9 @@ public final class TaskBotBehavior extends Behavior implements Helper {
 
     public TaskBotBehavior(Baritone baritone) {
         super(baritone);
-        protectUtilityBlocks();
+        if (!NATIVE_ONLY_CLEARAREA) {
+            protectUtilityBlocks();
+        }
     }
 
     private void protectUtilityBlocks() {
@@ -372,9 +379,14 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             miningUnstickCooldown--;
         }
 
-        handleMiningUnstick();
+        if (!NATIVE_ONLY_CLEARAREA) {
+            handleMiningUnstick();
+        }
         pollCommandFile();
         monitorPendingNativeClearArea();
+        if (NATIVE_ONLY_CLEARAREA && hasTaskBreakSnapshot()) {
+            return;
+        }
         monitorNativeClearAreaCompletion();
         enforceIdleSafety();
         if (handleSetSpawn()) {

@@ -158,7 +158,8 @@ public abstract class Movement implements IMovement, MovementHelper {
             return true;
         }
         if (breakLock != null) {
-            if (TaskBotBehavior.hasTaskBreakSnapshot()
+            if (!TaskBotBehavior.bypassTaskBreakGate()
+                    && TaskBotBehavior.hasTaskBreakSnapshot()
                     && !TaskBotBehavior.isTaskBreakAllowed(breakLock)
                     && !TaskBotBehavior.isSafeTravelBreak(BlockStateInterface.get(ctx, breakLock))) {
                 breakLock = null;
@@ -187,7 +188,8 @@ public abstract class Movement implements IMovement, MovementHelper {
 
         boolean somethingInTheWay = false;
         for (BetterBlockPos blockPos : positionsToBreak) {
-            if (TaskBotBehavior.hasTaskBreakSnapshot()
+            if (!TaskBotBehavior.bypassTaskBreakGate()
+                    && TaskBotBehavior.hasTaskBreakSnapshot()
                     && !TaskBotBehavior.isTaskBreakAllowed(blockPos)
                     && !TaskBotBehavior.isSafeTravelBreak(BlockStateInterface.get(ctx, blockPos))) {
                 state.setStatus(MovementStatus.UNREACHABLE);

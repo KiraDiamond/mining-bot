@@ -205,7 +205,8 @@ public class CalculationContext {
         if (!allowBreak && !allowBreakAnyway.contains(current.getBlock())) {
             return COST_INF;
         }
-        if (TaskBotBehavior.hasTaskBreakSnapshot()
+        if (!TaskBotBehavior.bypassTaskBreakGate()
+                && TaskBotBehavior.hasTaskBreakSnapshot()
                 && !TaskBotBehavior.isTaskBreakAllowed(new BlockPos(x, y, z))
                 && !TaskBotBehavior.isSafeTravelBreak(current)) {
             return COST_INF;
