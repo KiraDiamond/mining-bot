@@ -264,7 +264,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         }
         Options options = ctx.minecraft().options;
         setOption(options.renderDistance(), 2);
-        setOption(options.simulationDistance(), 2);
+        setOption(options.simulationDistance(), 6);
         setOption(options.entityDistanceScaling(), 0.25D);
         setOption(options.framerateLimit(), 30);
         setOption(options.mipmapLevels(), 0);
@@ -495,6 +495,8 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             nativeClearAreaIdleRefreshes++;
             if (nativeClearAreaIdleRefreshes >= 2) {
                 promoteNativeClearAreaToDirectClearBox();
+            } else if (retargetNearestAllowedBlock()) {
+                nativeClearAreaLastRefreshAt = System.currentTimeMillis();
             } else {
                 refreshNativeClearArea("Baritone idle with blocks remaining");
             }
