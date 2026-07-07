@@ -123,6 +123,19 @@ public final class TaskBotBehavior extends Behavior implements Helper {
                 || block == Blocks.TWISTING_VINES_PLANT;
     }
 
+    public static boolean isProtectedTaskUtilityBlock(BlockState state) {
+        if (state == null || state.isAir()) {
+            return false;
+        }
+        Block block = state.getBlock();
+        return block instanceof ChestBlock
+                || block instanceof BedBlock
+                || block == Blocks.TORCH
+                || block == Blocks.WALL_TORCH
+                || block == Blocks.SOUL_TORCH
+                || block == Blocks.SOUL_WALL_TORCH;
+    }
+
     private static void setAllowedBreakCuboid(BlockPos a, BlockPos b) {
         allowedBreakMin = new BlockPos(
                 Math.min(a.getX(), b.getX()),
