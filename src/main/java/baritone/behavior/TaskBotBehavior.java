@@ -43,7 +43,6 @@ import net.minecraft.world.item.BedItem;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.FireworkRocketItem;
 import net.minecraft.world.item.Item;
-import net.minecraft.world.item.PickaxeItem;
 import net.minecraft.world.item.ShovelItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -2514,7 +2513,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
 
     private boolean isUsablePickaxe(ItemStack stack) {
         return !stack.isEmpty()
-                && stack.getItem() instanceof PickaxeItem
+                && BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath().endsWith("_pickaxe")
                 && (!stack.isDamageableItem() || durabilityLeft(stack) > TOOL_DURABILITY_THRESHOLD);
     }
 
