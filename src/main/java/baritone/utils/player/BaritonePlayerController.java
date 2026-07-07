@@ -17,6 +17,7 @@
 
 package baritone.utils.player;
 
+import baritone.behavior.TaskBotBehavior;
 import baritone.api.utils.IPlayerController;
 import baritone.utils.accessor.IPlayerControllerMP;
 import net.minecraft.client.Minecraft;
@@ -58,6 +59,10 @@ public final class BaritonePlayerController implements IPlayerController {
 
     @Override
     public boolean onPlayerDamageBlock(BlockPos pos, Direction side) {
+        if (!canBreak(pos)) {
+            mc.gameMode.stopDestroyBlock();
+            return false;
+        }
         return mc.gameMode.continueDestroyBlock(pos, side);
     }
 
@@ -89,11 +94,19 @@ public final class BaritonePlayerController implements IPlayerController {
 
     @Override
     public boolean clickBlock(BlockPos loc, Direction face) {
+        if (!canBreak(loc)) {
+            mc.gameMode.stopDestroyBlock();
+            return false;
+        }
         return mc.gameMode.startDestroyBlock(loc, face);
     }
 
     @Override
     public void setHittingBlock(boolean hittingBlock) {
         ((IPlayerControllerMP) mc.gameMode).setIsHittingBlock(hittingBlock);
+    }
+
+    private boolean canBreak(BlockPos pos) {
+        return mc.level == null || TaskBotBehavior.isTaskBlockBreakPermitted(pos, mc.level.getBlockState(pos));
     }
 }

@@ -137,6 +137,15 @@ public final class TaskBotBehavior extends Behavior implements Helper {
                 || block == Blocks.SOUL_WALL_TORCH;
     }
 
+    public static boolean isTaskBlockBreakPermitted(BlockPos pos, BlockState state) {
+        if (isProtectedTaskUtilityBlock(state)) {
+            return false;
+        }
+        return !hasTaskBreakSnapshot()
+                || isTaskBreakAllowed(pos)
+                || isSafeTravelBreak(state);
+    }
+
     private static void setAllowedBreakCuboid(BlockPos a, BlockPos b) {
         allowedBreakMin = new BlockPos(
                 Math.min(a.getX(), b.getX()),
