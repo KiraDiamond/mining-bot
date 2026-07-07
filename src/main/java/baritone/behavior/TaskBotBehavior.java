@@ -1633,7 +1633,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         clearBoxLastActivityAt = System.currentTimeMillis();
         clearBoxBreakSnapshotReady = true;
         beginBreakingTask();
-        Baritone.settings().allowPlace.value = false;
+        Baritone.settings().allowPlace.value = true;
         nativeClearAreaRecovering = false;
         nativeClearAreaNoSelectionSince = 0L;
         nativeClearAreaIdleRefreshes = 0;
@@ -1800,7 +1800,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         }
 
         Baritone.settings().allowBreak.value = false;
-        Baritone.settings().allowPlace.value = false;
+        Baritone.settings().allowPlace.value = true;
         if (clearBoxGotoCooldown == 0) {
             BlockPos stand = findStandNear(clearBoxTarget);
             if (stand != null) {
