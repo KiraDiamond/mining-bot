@@ -1621,6 +1621,16 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             logDirect("TaskBot: native cleararea snapshot found no breakable blocks in " + min + " -> " + max + "; stopping.");
             return;
         }
+        clearBoxMin = min;
+        clearBoxMax = max;
+        clearBoxTarget = null;
+        clearBoxBreakLock = null;
+        clearBoxSkippedTargets.clear();
+        clearBoxSkipOrigin = null;
+        clearBoxLastActivityFeet = ctx.playerFeet().immutable();
+        clearBoxLastGotoTarget = null;
+        clearBoxLastStandTarget = null;
+        clearBoxLastActivityAt = System.currentTimeMillis();
         clearBoxBreakSnapshotReady = true;
         beginBreakingTask();
         Baritone.settings().allowPlace.value = false;
@@ -1629,12 +1639,8 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         nativeClearAreaIdleRefreshes = 0;
         baritone.getPathingBehavior().cancelEverything();
         baritone.getCommandManager().execute("stop");
-        baritone.getCommandManager().execute("sel clear");
-        baritone.getCommandManager().execute("sel pos1 " + min.getX() + " " + min.getY() + " " + min.getZ());
-        baritone.getCommandManager().execute("sel pos2 " + max.getX() + " " + max.getY() + " " + max.getZ());
-        baritone.getCommandManager().execute("sel cleararea");
         nativeClearAreaLastRefreshAt = System.currentTimeMillis();
-        logDirect("TaskBot: native Baritone cleararea started " + min + " -> " + max + "; snapshot locked " + allowedBreakPositions.size() + " block(s); allowBreak=" + Baritone.settings().allowBreak.value + " allowPlace=" + Baritone.settings().allowPlace.value + ".");
+        logDirect("TaskBot: direct snapshot clearbox started " + min + " -> " + max + "; locked " + allowedBreakPositions.size() + " approved block(s); allowBreak=" + Baritone.settings().allowBreak.value + " allowPlace=" + Baritone.settings().allowPlace.value + ".");
     }
 
     private void clearCurrentClearBoxState() {
@@ -2008,9 +2014,8 @@ public final class TaskBotBehavior extends Behavior implements Helper {
 
     private double clearBoxTargetScore(BlockPos player, BlockPos candidate, double standDistance) {
         double directDistance = player.distSqr(candidate);
-        double verticalPenalty = Math.abs(candidate.getY() - player.getY()) * 12.0D;
-        double belowTopPenalty = Math.max(0, clearBoxMax.getY() - candidate.getY()) * 0.75D;
-        return directDistance + standDistance * 1.5D + verticalPenalty + belowTopPenalty;
+        double verticalPenalty = Math.abs(candidate.getY() - player.getY()) * 48.0D;
+        return directDistance + standDistance * 2.0D + verticalPenalty;
     }
 
     private int highestClearBoxLayerWithTargets(boolean includeSkipped) {
