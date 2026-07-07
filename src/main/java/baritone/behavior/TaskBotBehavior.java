@@ -202,6 +202,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private BlockPos clearBoxSkipOrigin;
     private BlockPos clearBoxLastActivityFeet;
     private BlockPos clearBoxLastGotoTarget;
+    private BlockPos clearBoxLastStandTarget;
     private BlockPos clearBoxBreakLock;
     private long clearBoxLastActivityAt;
     private int clearBoxGotoCooldown;
@@ -1595,6 +1596,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         clearBoxSkipOrigin = null;
         clearBoxLastActivityFeet = ctx.playerFeet().immutable();
         clearBoxLastGotoTarget = null;
+        clearBoxLastStandTarget = null;
         clearBoxLastActivityAt = System.currentTimeMillis();
         clearBoxGotoCooldown = 0;
         clearBoxLogCooldown = 0;
@@ -1634,6 +1636,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         clearBoxSkipOrigin = null;
         clearBoxLastActivityFeet = null;
         clearBoxLastGotoTarget = null;
+        clearBoxLastStandTarget = null;
         clearBoxLastActivityAt = 0L;
         clearBoxGotoCooldown = 0;
         clearBoxLogCooldown = 0;
@@ -1705,6 +1708,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             }
             clearBoxTarget = findNextClearBoxTarget();
             clearBoxLastGotoTarget = null;
+            clearBoxLastStandTarget = null;
             if (clearBoxTarget == null) {
                 if (!hasRemainingClearBoxBlocks()) {
                     logDirect("TaskBot: native clearbox complete " + clearBoxMin + " -> " + clearBoxMax + ".");
@@ -1727,13 +1731,20 @@ public final class TaskBotBehavior extends Behavior implements Helper {
 
         if (clearBoxTarget != null
                 && clearBoxLastGotoTarget != null
-                && clearBoxLastGotoTarget.equals(clearBoxTarget)
+                && clearBoxLastStandTarget != null
                 && !baritone.getPathingBehavior().isPathing()
                 && System.currentTimeMillis() - clearBoxLastActivityAt >= 8_000L) {
+            if (clearBoxLastStandTarget.distSqr(feet) > 2.0D) {
+                clearBoxLastGotoTarget = null;
+                clearBoxGotoCooldown = 0;
+                markClearBoxActivity();
+                logDirect("TaskBot: native clearbox path stalled before reaching stand " + clearBoxLastStandTarget + " for " + clearBoxTarget + "; retrying path.");
+                return true;
+            }
             clearBoxNoPathSkips++;
-            logDirect("TaskBot: native clearbox no active path to stand for " + clearBoxTarget + "; skipping target.");
+            logDirect("TaskBot: native clearbox reached stand " + clearBoxLastStandTarget + " but still cannot reach " + clearBoxTarget + "; skipping target.");
             if (clearBoxNoPathSkips >= 16) {
-                logDirect("TaskBot: native clearbox blocked; 16 stand targets had no path from " + ctx.playerFeet() + " without breaking outside " + clearBoxMin + " -> " + clearBoxMax + ". Stopping safe.");
+                logDirect("TaskBot: native clearbox blocked; 16 stand targets were unusable from " + ctx.playerFeet() + " without breaking outside " + clearBoxMin + " -> " + clearBoxMax + ". Stopping safe.");
                 stopClearBox();
                 return false;
             }
@@ -1741,6 +1752,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             clearBoxSkipOrigin = ctx.playerFeet().immutable();
             clearBoxTarget = null;
             clearBoxLastGotoTarget = null;
+            clearBoxLastStandTarget = null;
             clearBoxGotoCooldown = 0;
             return true;
         }
@@ -1763,9 +1775,12 @@ public final class TaskBotBehavior extends Behavior implements Helper {
 
         Baritone.settings().allowBreak.value = false;
         Baritone.settings().allowPlace.value = false;
-        if (clearBoxGotoCooldown == 0 && shouldIssueClearBoxGoto()) {
+        if (clearBoxGotoCooldown == 0) {
             BlockPos stand = findStandNear(clearBoxTarget);
             if (stand != null) {
+                if (!shouldIssueClearBoxGoto(stand)) {
+                    return true;
+                }
                 if (stand.distSqr(ctx.playerFeet()) <= 2.0D) {
                     clearBoxNoPathSkips++;
                     logDirect("TaskBot: native clearbox cannot reach " + clearBoxTarget + " from current stand " + stand + "; skipping.");
@@ -1777,9 +1792,12 @@ public final class TaskBotBehavior extends Behavior implements Helper {
                     clearBoxSkippedTargets.add(clearBoxTarget.immutable());
                     clearBoxSkipOrigin = ctx.playerFeet().immutable();
                     clearBoxTarget = null;
+                    clearBoxLastGotoTarget = null;
+                    clearBoxLastStandTarget = null;
                 } else {
                     baritone.getCommandManager().execute("goto " + stand.getX() + " " + stand.getY() + " " + stand.getZ());
-                    clearBoxLastGotoTarget = clearBoxTarget.immutable();
+                    clearBoxLastGotoTarget = stand.immutable();
+                    clearBoxLastStandTarget = stand.immutable();
                     markClearBoxActivity();
                     logDirect("TaskBot: native clearbox walking to " + stand + " for " + clearBoxTarget + ".");
                 }
@@ -1788,6 +1806,8 @@ public final class TaskBotBehavior extends Behavior implements Helper {
                 clearBoxSkippedTargets.add(clearBoxTarget.immutable());
                 clearBoxSkipOrigin = ctx.playerFeet().immutable();
                 clearBoxTarget = null;
+                clearBoxLastGotoTarget = null;
+                clearBoxLastStandTarget = null;
             }
             clearBoxGotoCooldown = ACTION_COOLDOWN_TICKS * 3;
         }
@@ -1830,8 +1850,8 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         clearBoxLastActivityAt = System.currentTimeMillis();
     }
 
-    private boolean shouldIssueClearBoxGoto() {
-        if (clearBoxLastGotoTarget == null || !clearBoxLastGotoTarget.equals(clearBoxTarget)) {
+    private boolean shouldIssueClearBoxGoto(BlockPos gotoTarget) {
+        if (clearBoxLastGotoTarget == null || !clearBoxLastGotoTarget.equals(gotoTarget)) {
             return true;
         }
         return System.currentTimeMillis() - clearBoxLastActivityAt >= CLEARBOX_INACTIVITY_REMINDER_MS;
