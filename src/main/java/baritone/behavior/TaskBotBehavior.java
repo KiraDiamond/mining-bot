@@ -397,7 +397,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         }
         pollCommandFile();
         monitorPendingNativeClearArea();
-        if (NATIVE_ONLY_CLEARAREA && hasTaskBreakSnapshot()) {
+        if (NATIVE_ONLY_CLEARAREA) {
             return;
         }
         monitorNativeClearAreaCompletion();
