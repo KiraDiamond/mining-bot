@@ -1966,10 +1966,18 @@ public final class TaskBotBehavior extends Behavior implements Helper {
 
     private BlockPos findNextClearBoxTarget() {
         BlockPos player = ctx.playerFeet();
-        return findNextClearBoxTarget(player, false);
+        BlockPos nearby = findNextClearBoxTarget(player, false, 4);
+        if (nearby != null) {
+            return nearby;
+        }
+        BlockPos reachableBand = findNextClearBoxTarget(player, false, 8);
+        if (reachableBand != null) {
+            return reachableBand;
+        }
+        return findNextClearBoxTarget(player, false, -1);
     }
 
-    private BlockPos findNextClearBoxTarget(BlockPos player, boolean includeSkipped) {
+    private BlockPos findNextClearBoxTarget(BlockPos player, boolean includeSkipped, int maxAbovePlayer) {
         int targetY = highestClearBoxLayerWithTargets(includeSkipped);
         if (targetY == Integer.MIN_VALUE) {
             return null;
@@ -1981,6 +1989,9 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         for (BlockPos pos : BlockPos.betweenClosed(clearBoxMin, clearBoxMax)) {
             BlockPos candidate = pos.immutable();
             if (!shouldClearBlock(candidate) || (!includeSkipped && clearBoxSkippedTargets.contains(candidate))) {
+                continue;
+            }
+            if (maxAbovePlayer >= 0 && candidate.getY() > player.getY() + maxAbovePlayer) {
                 continue;
             }
             boolean exposed = isExposedForClearBox(candidate);
