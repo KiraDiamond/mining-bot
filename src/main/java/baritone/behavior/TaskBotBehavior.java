@@ -255,9 +255,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
 
     public TaskBotBehavior(Baritone baritone) {
         super(baritone);
-        if (!NATIVE_ONLY_CLEARAREA) {
-            protectUtilityBlocks();
-        }
+        protectUtilityBlocks();
     }
 
     private void protectUtilityBlocks() {
@@ -273,7 +271,16 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         protectBlock(Blocks.WALL_TORCH);
         protectBlock(Blocks.SOUL_TORCH);
         protectBlock(Blocks.SOUL_WALL_TORCH);
+        protectBeds();
         protectLeaves();
+    }
+
+    private void protectBeds() {
+        for (Block block : BuiltInRegistries.BLOCK) {
+            if (block instanceof BedBlock) {
+                protectBlock(block);
+            }
+        }
     }
 
     private void protectLeaves() {
@@ -2160,19 +2167,14 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             return false;
         }
         Block block = state.getBlock();
-        return !(block instanceof ChestBlock)
-                && !(block instanceof BedBlock)
+        return !isProtectedTaskUtilityBlock(state)
                 && block != Blocks.VINE
                 && block != Blocks.CAVE_VINES
                 && block != Blocks.CAVE_VINES_PLANT
                 && block != Blocks.WEEPING_VINES
                 && block != Blocks.WEEPING_VINES_PLANT
                 && block != Blocks.TWISTING_VINES
-                && block != Blocks.TWISTING_VINES_PLANT
-                && block != Blocks.TORCH
-                && block != Blocks.WALL_TORCH
-                && block != Blocks.SOUL_TORCH
-                && block != Blocks.SOUL_WALL_TORCH;
+                && block != Blocks.TWISTING_VINES_PLANT;
     }
 
     private boolean insideClearBox(BlockPos pos) {
