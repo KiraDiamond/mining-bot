@@ -470,6 +470,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         keepSlotsClearWithoutPickaxe();
         monitorNativeClearAreaCompletion();
         if (NATIVE_ONLY_CLEARAREA) {
+            handleClearBox();
             return;
         }
         enforceIdleSafety();
