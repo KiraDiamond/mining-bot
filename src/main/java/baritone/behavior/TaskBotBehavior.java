@@ -82,6 +82,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private static final int NO_PICKAXE_MIN_FREE_SLOTS = 3;
     private static final long CLEARBOX_INACTIVITY_REMINDER_MS = 120_000L;
     private static final long NATIVE_CLEARAREA_NO_SELECTION_PROMOTE_MS = 45_000L;
+    private static final long NATIVE_CLEARAREA_INVALID_SELECTION_PROMOTE_MS = 8_000L;
     private static final boolean NATIVE_ONLY_CLEARAREA = true;
     private static final Pattern SET_SPAWN_COMMAND = Pattern.compile("^setspawn\\s+(-?\\d+)\\s+(-?\\d+)\\s+(-?\\d+)$");
     private static final Pattern CLEARBOX_COMMAND = Pattern.compile("^clearbox\\s+(-?\\d+)\\s+(-?\\d+)\\s+(-?\\d+)\\s+(-?\\d+)\\s+(-?\\d+)\\s+(-?\\d+)$");
@@ -297,6 +298,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private BlockPos pendingNativeClearMin;
     private BlockPos pendingNativeClearMax;
     private BlockPos pendingNativeClearApproach;
+    private long nativeClearAreaInvalidSelectionSince;
     private boolean taskClientOptionsApplied;
 
     public TaskBotBehavior(Baritone baritone) {
@@ -466,10 +468,10 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         monitorPendingNativeClearArea();
         updateNoPickaxeBreakMode();
         keepSlotsClearWithoutPickaxe();
+        monitorNativeClearAreaCompletion();
         if (NATIVE_ONLY_CLEARAREA) {
             return;
         }
-        monitorNativeClearAreaCompletion();
         enforceIdleSafety();
         if (handleSetSpawn()) {
             return;
@@ -531,10 +533,21 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             nativeClearAreaRecovering = false;
             nativeClearAreaLastRefreshAt = 0L;
             nativeClearAreaNoSelectionSince = 0L;
+            nativeClearAreaInvalidSelectionSince = 0L;
             nativeClearAreaIdleRefreshes = 0;
             return;
         }
         BlockPos feet = ctx.playerFeet();
+        boolean invalidSelectedBlock = ctx.getSelectedBlock()
+                .map(pos -> !isBreakableAllowedPosition(pos))
+                .orElse(false);
+        if (invalidSelectedBlock) {
+            if (nativeClearAreaInvalidSelectionSince == 0L) {
+                nativeClearAreaInvalidSelectionSince = System.currentTimeMillis();
+            }
+        } else {
+            nativeClearAreaInvalidSelectionSince = 0L;
+        }
         if (nativeClearAreaRecovering) {
             if (isNearAllowedCuboid(feet)) {
                 nativeClearAreaRecovering = false;
@@ -578,10 +591,16 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         if (noSelectedBlock && noPath && handleNativeClearAreaDirectBreak()) {
             nativeClearAreaLastRefreshAt = System.currentTimeMillis();
             nativeClearAreaNoSelectionSince = 0L;
+            nativeClearAreaInvalidSelectionSince = 0L;
             nativeClearAreaIdleRefreshes = 0;
             return;
         }
         if (noSelectedBlock && System.currentTimeMillis() - nativeClearAreaNoSelectionSince >= NATIVE_CLEARAREA_NO_SELECTION_PROMOTE_MS) {
+            promoteNativeClearAreaToDirectClearBox();
+            return;
+        }
+        if (invalidSelectedBlock && System.currentTimeMillis() - nativeClearAreaInvalidSelectionSince >= NATIVE_CLEARAREA_INVALID_SELECTION_PROMOTE_MS) {
+            logDirect("TaskBot: native cleararea selected invalid target " + ctx.getSelectedBlock().orElse(null) + "; switching to direct snapshot miner.");
             promoteNativeClearAreaToDirectClearBox();
             return;
         }
@@ -614,6 +633,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         clearBoxBreakSnapshotReady = true;
         nativeClearAreaLastRefreshAt = System.currentTimeMillis();
         nativeClearAreaNoSelectionSince = 0L;
+        nativeClearAreaInvalidSelectionSince = 0L;
         nativeClearAreaIdleRefreshes = 0;
         beginBreakingTask();
         Baritone.settings().allowPlace.value = false;
@@ -1717,6 +1737,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         Baritone.settings().allowPlace.value = true;
         nativeClearAreaRecovering = false;
         nativeClearAreaNoSelectionSince = 0L;
+        nativeClearAreaInvalidSelectionSince = 0L;
         nativeClearAreaIdleRefreshes = 0;
         baritone.getPathingBehavior().cancelEverything();
         baritone.getCommandManager().execute("stop");
@@ -1747,6 +1768,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         clearBoxBreakSnapshotReady = false;
         nativeClearAreaRecovering = false;
         nativeClearAreaNoSelectionSince = 0L;
+        nativeClearAreaInvalidSelectionSince = 0L;
         nativeClearAreaIdleRefreshes = 0;
     }
 
