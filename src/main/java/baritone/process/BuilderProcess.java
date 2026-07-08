@@ -284,7 +284,7 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                         continue; // irrelevant
                     }
                     BlockState curr = bcc.bsi.get0(x, y, z);
-                    if (!(curr.getBlock() instanceof AirBlock) && !(curr.getBlock() == Blocks.WATER || curr.getBlock() == Blocks.LAVA) && !valid(curr, desired, false)) {
+                    if (!(curr.getBlock() instanceof AirBlock) && !(curr.getBlock() == Blocks.WATER || curr.getBlock() == Blocks.LAVA) && TaskBotBehavior.canTaskBreakState(curr) && !valid(curr, desired, false)) {
                         BetterBlockPos pos = new BetterBlockPos(x, y, z);
                         Optional<Rotation> rot = RotationUtils.reachable(ctx, pos, ctx.playerController().getBlockReachDistance());
                         if (rot.isPresent()) {
@@ -729,8 +729,10 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                     } else {
                         flowingLiquids.add(pos);
                     }
-                } else {
+                } else if (TaskBotBehavior.canTaskBreakState(state)) {
                     breakable.add(pos);
+                } else {
+                    outOfBounds.add(pos);
                 }
             }
         });
@@ -1153,7 +1155,7 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         public double breakCostMultiplierAt(int x, int y, int z, BlockState current) {
             if ((!allowBreak && !allowBreakAnyway.contains(current.getBlock()))
                     || (!TaskBotBehavior.bypassTaskBreakGate() && !TaskBotBehavior.isTaskBreakAllowed(new BlockPos(x, y, z)))
-                    || TaskBotBehavior.isProtectedTaskUtilityBlock(current)
+                    || !TaskBotBehavior.canTaskBreakState(current)
                     || isPossiblyProtected(x, y, z)) {
                 return COST_INF;
             }

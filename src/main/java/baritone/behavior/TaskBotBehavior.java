@@ -88,6 +88,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private static BlockPos allowedBreakMin;
     private static BlockPos allowedBreakMax;
     private static final Set<BlockPos> allowedBreakPositions = new HashSet<>();
+    private static volatile boolean noUsablePickaxeForTask;
 
     public static boolean isTaskBreakAllowed(BlockPos pos) {
         if (allowedBreakMin == null || allowedBreakMax == null || allowedBreakPositions.isEmpty()) {
@@ -137,8 +138,36 @@ public final class TaskBotBehavior extends Behavior implements Helper {
                 || block == Blocks.SOUL_WALL_TORCH;
     }
 
-    public static boolean isTaskBlockBreakPermitted(BlockPos pos, BlockState state) {
+    public static boolean canTaskBreakState(BlockState state) {
         if (isProtectedTaskUtilityBlock(state)) {
+            return false;
+        }
+        return !noUsablePickaxeForTask || isHandFallbackBlock(state);
+    }
+
+    private static boolean isHandFallbackBlock(BlockState state) {
+        if (state == null || state.isAir()) {
+            return false;
+        }
+        String path = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath();
+        return path.contains("dirt")
+                || path.equals("grass_block")
+                || path.equals("sand")
+                || path.equals("red_sand")
+                || path.equals("gravel")
+                || path.equals("clay")
+                || path.equals("mud")
+                || path.contains("log")
+                || path.contains("wood")
+                || path.contains("stem")
+                || path.contains("hyphae")
+                || path.contains("planks")
+                || path.contains("leaves")
+                || path.contains("roots");
+    }
+
+    public static boolean isTaskBlockBreakPermitted(BlockPos pos, BlockState state) {
+        if (!canTaskBreakState(state)) {
             return false;
         }
         return !hasTaskBreakSnapshot()
@@ -418,6 +447,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         }
         pollCommandFile();
         monitorPendingNativeClearArea();
+        updateNoPickaxeBreakMode();
         keepSlotsClearWithoutPickaxe();
         if (NATIVE_ONLY_CLEARAREA) {
             return;
@@ -672,13 +702,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         if (state.isAir() || state.canBeReplaced() || state.getDestroySpeed(ctx.world(), pos) < 0) {
             return false;
         }
-        Block block = state.getBlock();
-        return !(block instanceof ChestBlock)
-                && !(block instanceof BedBlock)
-                && block != Blocks.TORCH
-                && block != Blocks.WALL_TORCH
-                && block != Blocks.SOUL_TORCH
-                && block != Blocks.SOUL_WALL_TORCH;
+        return canTaskBreakState(state);
     }
 
     private boolean isNearAllowedCuboid(BlockPos feet) {
@@ -2167,7 +2191,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             return false;
         }
         Block block = state.getBlock();
-        return !isProtectedTaskUtilityBlock(state)
+        return canTaskBreakState(state)
                 && block != Blocks.VINE
                 && block != Blocks.CAVE_VINES
                 && block != Blocks.CAVE_VINES_PLANT
@@ -2509,6 +2533,21 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         if (dropped > 0) {
             logDirect("TaskBot: no usable pickaxe found; dropped " + dropped + " stack(s) to keep "
                     + NO_PICKAXE_MIN_FREE_SLOTS + " inventory slots clear.");
+        }
+    }
+
+    private void updateNoPickaxeBreakMode() {
+        boolean active = isActiveMiningTask();
+        boolean noPickaxe = active && !hasUsablePickaxe();
+        if (noUsablePickaxeForTask != noPickaxe) {
+            noUsablePickaxeForTask = noPickaxe;
+            if (active) {
+                if (noPickaxe) {
+                    logDirect("TaskBot: no usable pickaxe; ignoring stone/hard blocks and clearing hand-safe dirt/wood only.");
+                } else {
+                    logDirect("TaskBot: usable pickaxe available; clearing normal approved blocks.");
+                }
+            }
         }
     }
 
