@@ -267,6 +267,33 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         return state;
     }
 
+    private Optional<Tuple<BetterBlockPos, Rotation>> lockedBreakNearPlayer(BuilderCalculationContext bcc) {
+        BlockPos locked = TaskBotBehavior.taskBreakLock();
+        if (locked == null) {
+            return Optional.empty();
+        }
+        BetterBlockPos pos = new BetterBlockPos(locked);
+        BlockState curr = bcc.bsi.get0(pos);
+        if (curr.getBlock() instanceof AirBlock
+                || curr.getBlock() == Blocks.WATER
+                || curr.getBlock() == Blocks.LAVA
+                || !TaskBotBehavior.canTaskBreakState(curr)) {
+            TaskBotBehavior.clearTaskBreakLock(pos);
+            return Optional.empty();
+        }
+        BlockState desired = bcc.getSchematic(pos.x, pos.y, pos.z, curr);
+        if (desired == null || valid(curr, desired, false)) {
+            TaskBotBehavior.clearTaskBreakLock(pos);
+            return Optional.empty();
+        }
+        Optional<Rotation> rot = RotationUtils.reachable(ctx, pos, ctx.playerController().getBlockReachDistance());
+        if (rot.isEmpty()) {
+            TaskBotBehavior.clearTaskBreakLock(pos);
+            return Optional.empty();
+        }
+        return Optional.of(new Tuple<>(pos, rot.get()));
+    }
+
     private Optional<Tuple<BetterBlockPos, Rotation>> toBreakNearPlayer(BuilderCalculationContext bcc) {
         BetterBlockPos center = ctx.playerFeet();
         BetterBlockPos pathStart = baritone.getPathingBehavior().pathStart();
@@ -532,12 +559,28 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             trim();
         }
 
+        Optional<Tuple<BetterBlockPos, Rotation>> lockedBreak = lockedBreakNearPlayer(bcc);
+        if (lockedBreak.isPresent() && isSafeToCancel && ctx.player().onGround()) {
+            Rotation rot = lockedBreak.get().getB();
+            BetterBlockPos pos = lockedBreak.get().getA();
+            baritone.getLookBehavior().updateTarget(rot, true);
+            MovementHelper.switchToBestToolFor(ctx, bcc.get(pos));
+            if (ctx.player().isCrouching()) {
+                baritone.getInputOverrideHandler().setInputForceState(Input.SNEAK, true);
+            }
+            if (ctx.isLookingAt(pos) || ctx.playerRotations().isReallyCloseTo(rot)) {
+                baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_LEFT, true);
+            }
+            return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
+        }
+
         Optional<Tuple<BetterBlockPos, Rotation>> toBreak = toBreakNearPlayer(bcc);
         if (toBreak.isPresent() && isSafeToCancel && ctx.player().onGround()) {
             // we'd like to pause to break this block
             // only change look direction if it's safe (don't want to fuck up an in progress parkour for example
             Rotation rot = toBreak.get().getB();
             BetterBlockPos pos = toBreak.get().getA();
+            TaskBotBehavior.setTaskBreakLock(pos);
             baritone.getLookBehavior().updateTarget(rot, true);
             MovementHelper.switchToBestToolFor(ctx, bcc.get(pos));
             if (ctx.player().isCrouching()) {

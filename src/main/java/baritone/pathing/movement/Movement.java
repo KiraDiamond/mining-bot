@@ -157,8 +157,13 @@ public abstract class Movement implements IMovement, MovementHelper {
         if (state.getStatus() == MovementStatus.WAITING) {
             return true;
         }
+        BlockPos taskLocked = TaskBotBehavior.taskBreakLock();
+        if (taskLocked != null && breakLock == null) {
+            breakLock = new BetterBlockPos(taskLocked);
+        }
         if (breakLock != null) {
             if (!TaskBotBehavior.canTaskBreakState(BlockStateInterface.get(ctx, breakLock))) {
+                TaskBotBehavior.clearTaskBreakLock(breakLock);
                 breakLock = null;
                 state.setStatus(MovementStatus.UNREACHABLE);
                 return true;
@@ -167,11 +172,13 @@ public abstract class Movement implements IMovement, MovementHelper {
                     && TaskBotBehavior.hasTaskBreakSnapshot()
                     && !TaskBotBehavior.isTaskBreakAllowed(breakLock)
                     && !TaskBotBehavior.isSafeTravelBreak(BlockStateInterface.get(ctx, breakLock))) {
+                TaskBotBehavior.clearTaskBreakLock(breakLock);
                 breakLock = null;
                 state.setStatus(MovementStatus.UNREACHABLE);
                 return true;
             }
             if (MovementHelper.canWalkThrough(ctx, breakLock)) {
+                TaskBotBehavior.clearTaskBreakLock(breakLock);
                 breakLock = null;
             } else if (!ctx.world().getEntitiesOfClass(FallingBlockEntity.class, new AABB(0, 0, 0, 1, 1.1, 1).move(breakLock)).isEmpty() && Baritone.settings().pauseMiningForFallingBlocks.value) {
                 return false;
@@ -182,11 +189,13 @@ public abstract class Movement implements IMovement, MovementHelper {
                     Rotation rotTowardsBlock = lockedReachable.get();
                     state.setTarget(new MovementState.MovementTarget(rotTowardsBlock, true));
                     if (ctx.isLookingAt(breakLock) || ctx.playerRotations().isReallyCloseTo(rotTowardsBlock)) {
+                        TaskBotBehavior.setTaskBreakLock(breakLock);
                         state.setInput(Input.CLICK_LEFT, true);
                     }
                     return false;
                 }
                 // Player moved out of safe reach; release the lock and let pathing move closer.
+                TaskBotBehavior.clearTaskBreakLock(breakLock);
                 breakLock = null;
             }
         }
@@ -216,6 +225,7 @@ public abstract class Movement implements IMovement, MovementHelper {
                     state.setTarget(new MovementState.MovementTarget(rotTowardsBlock, true));
                     if (ctx.isLookingAt(blockPos) || ctx.playerRotations().isReallyCloseTo(rotTowardsBlock)) {
                         breakLock = blockPos;
+                        TaskBotBehavior.setTaskBreakLock(blockPos);
                         state.setInput(Input.CLICK_LEFT, true);
                     }
                     return false;

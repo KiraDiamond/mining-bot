@@ -89,6 +89,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
     private static BlockPos allowedBreakMax;
     private static final Set<BlockPos> allowedBreakPositions = new HashSet<>();
     private static volatile boolean noUsablePickaxeForTask;
+    private static volatile BlockPos taskBreakLock;
 
     public static boolean isTaskBreakAllowed(BlockPos pos) {
         if (allowedBreakMin == null || allowedBreakMax == null || allowedBreakPositions.isEmpty()) {
@@ -175,6 +176,21 @@ public final class TaskBotBehavior extends Behavior implements Helper {
                 || isSafeTravelBreak(state);
     }
 
+    public static BlockPos taskBreakLock() {
+        return taskBreakLock;
+    }
+
+    public static void setTaskBreakLock(BlockPos pos) {
+        taskBreakLock = pos == null ? null : pos.immutable();
+    }
+
+    public static void clearTaskBreakLock(BlockPos pos) {
+        BlockPos current = taskBreakLock;
+        if (pos == null || current == null || current.equals(pos)) {
+            taskBreakLock = null;
+        }
+    }
+
     private static void setAllowedBreakCuboid(BlockPos a, BlockPos b) {
         allowedBreakMin = new BlockPos(
                 Math.min(a.getX(), b.getX()),
@@ -193,6 +209,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         allowedBreakMin = null;
         allowedBreakMax = null;
         allowedBreakPositions.clear();
+        taskBreakLock = null;
     }
 
     private static Path commandFile() {
@@ -700,6 +717,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         }
         BlockState state = ctx.world().getBlockState(pos);
         if (state.isAir() || state.canBeReplaced() || state.getDestroySpeed(ctx.world(), pos) < 0) {
+            clearTaskBreakLock(pos);
             return false;
         }
         return canTaskBreakState(state);
@@ -1038,6 +1056,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         previousAllowPlace = null;
         nativeClearAreaRecovering = false;
         nativeClearAreaLastRefreshAt = 0L;
+        clearTaskBreakLock(null);
         clearAllowedBreakCuboid();
         Baritone.settings().allowBreak.value = false;
         Baritone.settings().allowPlace.value = false;
@@ -1859,6 +1878,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
             baritone.getLookBehavior().updateTarget(rotation, true);
             if (ctx.isLookingAt(clearBoxTarget) || ctx.playerRotations().isReallyCloseTo(rotation)) {
                 clearBoxBreakLock = clearBoxTarget.immutable();
+                setTaskBreakLock(clearBoxBreakLock);
                 baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_LEFT, true);
                 markClearBoxActivity();
             }
@@ -1908,11 +1928,13 @@ public final class TaskBotBehavior extends Behavior implements Helper {
 
     private boolean holdClearBoxBreakLock() {
         if (clearBoxBreakLock == null || !shouldClearBlock(clearBoxBreakLock)) {
+            clearTaskBreakLock(clearBoxBreakLock);
             baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_LEFT, false);
             return false;
         }
         Optional<Rotation> reachable = RotationUtils.reachable(ctx, clearBoxBreakLock, ctx.playerController().getBlockReachDistance());
         if (reachable.isEmpty()) {
+            clearTaskBreakLock(clearBoxBreakLock);
             baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_LEFT, false);
             return false;
         }
@@ -1924,6 +1946,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         Rotation rotation = reachable.get();
         baritone.getLookBehavior().updateTarget(rotation, true);
         if (ctx.isLookingAt(clearBoxBreakLock) || ctx.playerRotations().isReallyCloseTo(rotation)) {
+            setTaskBreakLock(clearBoxBreakLock);
             baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_LEFT, true);
             markClearBoxActivity();
         }
@@ -2188,6 +2211,7 @@ public final class TaskBotBehavior extends Behavior implements Helper {
         }
         BlockState state = ctx.world().getBlockState(pos);
         if (state.isAir() || state.canBeReplaced() || state.getDestroySpeed(ctx.world(), pos) < 0) {
+            clearTaskBreakLock(pos);
             return false;
         }
         Block block = state.getBlock();
