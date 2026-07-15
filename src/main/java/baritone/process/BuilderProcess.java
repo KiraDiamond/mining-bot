@@ -42,6 +42,7 @@ import baritone.utils.schematic.SelectionSchematic;
 import baritone.utils.schematic.litematica.LitematicaHelper;
 import baritone.utils.schematic.schematica.SchematicaHelper;
 import com.google.common.collect.ImmutableSet;
+import com.jbisb.hivetask.MiningSafety;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -639,10 +640,15 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                     int x = center.x + dx;
                     int y = center.y + dy;
                     int z = center.z + dz;
+                    BetterBlockPos pos = new BetterBlockPos(x, y, z);
+                    if (!MiningSafety.canPlanBreak(x, y, z)) {
+                        incorrectPositions.remove(pos);
+                        observedCompleted.add(BetterBlockPos.longHash(pos));
+                        continue;
+                    }
                     BlockState desired = bcc.getSchematic(x, y, z, bcc.bsi.get0(x, y, z));
                     if (desired != null) {
                         // we care about this position
-                        BetterBlockPos pos = new BetterBlockPos(x, y, z);
                         if (valid(bcc.bsi.get0(x, y, z), desired, false)) {
                             incorrectPositions.remove(pos);
                             observedCompleted.add(BetterBlockPos.longHash(pos));
@@ -664,6 +670,10 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                     int blockX = x + origin.getX();
                     int blockY = y + origin.getY();
                     int blockZ = z + origin.getZ();
+                    if (!MiningSafety.canPlanBreak(blockX, blockY, blockZ)) {
+                        observedCompleted.add(BetterBlockPos.longHash(blockX, blockY, blockZ));
+                        continue;
+                    }
                     BlockState current = bcc.bsi.get0(blockX, blockY, blockZ);
                     if (!schematic.inSchematic(x, y, z, current)) {
                         continue;
@@ -707,6 +717,10 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         Map<BlockState, Integer> missing = new HashMap<>();
         List<BetterBlockPos> outOfBounds = new ArrayList<>();
         incorrectPositions.forEach(pos -> {
+            if (!MiningSafety.canPlanBreak(pos.x, pos.y, pos.z)) {
+                outOfBounds.add(pos);
+                return;
+            }
             BlockState state = bcc.bsi.get0(pos);
             if (state.getBlock() instanceof AirBlock) {
                 BlockState desired = bcc.getSchematic(pos.x, pos.y, pos.z, state);
@@ -1106,6 +1120,9 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         }
 
         private BlockState getSchematic(int x, int y, int z, BlockState current) {
+            if (!MiningSafety.canPlanBreak(x, y, z)) {
+                return current;
+            }
             if (schematic.inSchematic(x - originX, y - originY, z - originZ, current)) {
                 return schematic.desiredState(x - originX, y - originY, z - originZ, current, BuilderProcess.this.approxPlaceable);
             } else {
@@ -1115,12 +1132,15 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
 
         @Override
         public double costOfPlacingAt(int x, int y, int z, BlockState current) {
+            // Clear-area jobs must not plan scaffolding when placement is disabled.
+            if (!Baritone.settings().allowPlace.value) {
+                return COST_INF;
+            }
             if (isPossiblyProtected(x, y, z) || !worldBorder.canPlaceAt(x, z)) { // make calculation fail properly if we can't build
                 return COST_INF;
             }
             BlockState sch = getSchematic(x, y, z, current);
             if (sch != null) {
-                // TODO this can return true even when allowPlace is off.... is that an issue?
                 if (sch.getBlock() instanceof AirBlock) {
                     // we want this to be air, but they're asking if they can place here
                     // this won't be a schematic block, this will be a throwaway
@@ -1149,7 +1169,9 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
 
         @Override
         public double breakCostMultiplierAt(int x, int y, int z, BlockState current) {
-            if ((!allowBreak && !allowBreakAnyway.contains(current.getBlock())) || isPossiblyProtected(x, y, z)) {
+            if (!MiningSafety.canPlanBreak(x, y, z)
+                    || (!allowBreak && !allowBreakAnyway.contains(current.getBlock()))
+                    || isPossiblyProtected(x, y, z)) {
                 return COST_INF;
             }
             BlockState sch = getSchematic(x, y, z, current);

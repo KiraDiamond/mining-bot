@@ -119,6 +119,8 @@ unimined.minecraft {
 archivesBaseName = archivesBaseName + "-common"
 
 sourceSets {
+    main.java.srcDir("src/hive/java")
+    test.java.srcDir("src/hive/test")
     api {
         compileClasspath += main.compileClasspath
         runtimeClasspath += main.runtimeClasspath

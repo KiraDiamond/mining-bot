@@ -1,0 +1,24 @@
+{
+  "name": "afk-farm-manager",
+  "version": "1.0.0",
+  "description": "Headless Minecraft AFK farm account manager.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "afk": "node src/index.js",
+    "bot": "node src/discord-bot.js",
+    "task-console": "node src/task-console.js",
+    "register": "node src/register-discord-commands.js",
+    "test": "node --test"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "discord.js": "^14.26.4",
+    "dotenv": "^17.4.2",
+    "minecraft-protocol": "github:PrismarineJS/node-minecraft-protocol#master"
+  }
+}

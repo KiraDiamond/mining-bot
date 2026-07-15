@@ -17,6 +17,8 @@
     "MixinEntityRenderManager",
     "MixinFireworkRocketEntity",
     "MixinItemStack",
+    "MixinHiveMinecraft",
+    "MixinHivePlayerController",
     "MixinLivingEntity",
     "MixinLootContextBuilder",
     "MixinLootTable",

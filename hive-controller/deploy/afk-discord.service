@@ -1,0 +1,15 @@
+[Unit]
+Description=AFK Farm Discord Manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/afk-farm-manager
+EnvironmentFile=%h/afk-farm-manager/.env
+ExecStart=/usr/bin/node src/discord-bot.js
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
