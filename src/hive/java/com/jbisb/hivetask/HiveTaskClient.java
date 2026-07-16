@@ -758,14 +758,14 @@ public final class HiveTaskClient {
             }
             return;
         }
-        if (idleFor >= DIRECT_BREAK_FALLBACK_MS && MiningSafety.hasReachableBreak()) {
+        if (idleFor >= DIRECT_BREAK_FALLBACK_MS && nearestReachableSnapshotBlock(player) != null) {
             beginDirectBreakFallback();
         } else if (!active && now - lastNativeActiveMs >= INACTIVE_TIMEOUT_MS) {
             escapeOrRecover("Native Baritone became inactive with " + remaining + " snapshotted blocks remaining.");
-        } else if (remaining <= 4 && idleFor >= TAIL_STUCK_TIMEOUT_MS) {
-            recover("Small unreachable tail made no progress for " + TAIL_STUCK_TIMEOUT_MS / 1000L + " seconds.");
         } else if (!task.currentCell.containsHorizontal(player.blockPosition()) && idleFor >= INACTIVE_TIMEOUT_MS) {
             escapeOrRecover("Bot is outside the current cell and made no progress for " + INACTIVE_TIMEOUT_MS / 1000L + " seconds.");
+        } else if (remaining <= 4 && idleFor >= TAIL_STUCK_TIMEOUT_MS) {
+            recover("Small unreachable tail made no progress for " + TAIL_STUCK_TIMEOUT_MS / 1000L + " seconds.");
         } else if (idleFor >= STUCK_TIMEOUT_MS) {
             escapeOrRecover("No movement or mined-block progress for " + STUCK_TIMEOUT_MS / 1000L + " seconds.");
         }
