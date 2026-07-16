@@ -323,7 +323,11 @@ public final class HiveTaskClient {
             return;
         }
 
-        MiningSafety.armBreaking(task.cellSnapshot, task.currentCell);
+        Cuboid scaffoldColumn = new Cuboid(
+            task.currentCell.x1, task.cuboid.y1, task.currentCell.z1,
+            task.currentCell.x2, task.currentCell.y2, task.currentCell.z2
+        );
+        MiningSafety.armBreaking(task.cellSnapshot, scaffoldColumn);
         setStage(Stage.MINING, "");
         watchdog.reset(stageSinceMs, MC.player.position(), task.cellSnapshot.size());
         lastNativeActiveMs = stageSinceMs;
@@ -381,7 +385,7 @@ public final class HiveTaskClient {
             escapeOrRecover("Native Baritone became inactive with " + remaining + " snapshotted blocks remaining.");
         } else if (remaining <= 4 && idleFor >= TAIL_STUCK_TIMEOUT_MS) {
             recover("Small unreachable tail made no progress for " + TAIL_STUCK_TIMEOUT_MS / 1000L + " seconds.");
-        } else if (!task.currentCell.contains(player.blockPosition()) && idleFor >= INACTIVE_TIMEOUT_MS) {
+        } else if (!task.currentCell.containsHorizontal(player.blockPosition()) && idleFor >= INACTIVE_TIMEOUT_MS) {
             escapeOrRecover("Bot is outside the current cell and made no progress for " + INACTIVE_TIMEOUT_MS / 1000L + " seconds.");
         } else if (idleFor >= STUCK_TIMEOUT_MS) {
             escapeOrRecover("No movement or mined-block progress for " + STUCK_TIMEOUT_MS / 1000L + " seconds.");
@@ -491,7 +495,7 @@ public final class HiveTaskClient {
             recover("Escape traversal lost its destination.");
             return;
         }
-        if (task.currentCell.contains(player.blockPosition())) {
+        if (task.currentCell.containsHorizontal(player.blockPosition())) {
             sendEvent("Stepped safely into the assigned cell; resuming its snapshot.");
             startMiningCell();
             return;

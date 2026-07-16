@@ -43,6 +43,11 @@ final class Cuboid {
             && z >= z1 && z <= z2;
     }
 
+    boolean containsHorizontal(BlockPos pos) {
+        return pos.getX() >= x1 && pos.getX() <= x2
+            && pos.getZ() >= z1 && pos.getZ() <= z2;
+    }
+
     boolean intersects(Cuboid other) {
         return x1 <= other.x2 && x2 >= other.x1
             && y1 <= other.y2 && y2 >= other.y1
