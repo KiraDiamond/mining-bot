@@ -901,8 +901,18 @@ public final class HiveTaskClient {
 
     private BlockPos cellAccessDestination(BlockPos playerPos) {
         Cuboid cell = task.currentCell;
-        int accessY = Math.max(task.cuboid.y1, cell.y1 - 1);
+        int belowY = Math.max(task.cuboid.y1, cell.y1 - 2);
         List<BlockPos> candidates = new ArrayList<>();
+        for (int x = cell.x1; x <= cell.x2; x++) {
+            for (int z = cell.z1; z <= cell.z2; z++) {
+                candidates.add(new BlockPos(x, belowY, z));
+            }
+        }
+        BlockPos nearest = nearestOpenCellAccess(candidates, playerPos);
+        if (nearest != null) return nearest;
+
+        int accessY = Math.max(task.cuboid.y1, cell.y1 - 1);
+        candidates.clear();
         for (int x = cell.x1; x <= cell.x2; x++) {
             candidates.add(new BlockPos(x, accessY, cell.z1 - 1));
             candidates.add(new BlockPos(x, accessY, cell.z2 + 1));
@@ -912,6 +922,17 @@ public final class HiveTaskClient {
             candidates.add(new BlockPos(cell.x2 + 1, accessY, z));
         }
 
+        nearest = nearestOpenCellAccess(candidates, playerPos);
+        if (nearest != null) return nearest;
+
+        return new BlockPos(
+            clamp(playerPos.getX(), cell.x1, cell.x2),
+            cell.y2 + 1,
+            clamp(playerPos.getZ(), cell.z1, cell.z2)
+        );
+    }
+
+    private BlockPos nearestOpenCellAccess(List<BlockPos> candidates, BlockPos playerPos) {
         BlockPos nearest = null;
         double nearestDistance = Double.POSITIVE_INFINITY;
         for (BlockPos candidate : candidates) {
@@ -922,13 +943,7 @@ public final class HiveTaskClient {
                 nearestDistance = distance;
             }
         }
-        if (nearest != null) return nearest;
-
-        return new BlockPos(
-            clamp(playerPos.getX(), cell.x1, cell.x2),
-            cell.y2 + 1,
-            clamp(playerPos.getZ(), cell.z1, cell.z2)
-        );
+        return nearest;
     }
 
     private boolean isOpenCellAccess(BlockPos pos) {
