@@ -60,6 +60,7 @@ public final class HiveTaskClient {
     private static final long STUCK_TIMEOUT_MS = envLong("TASK_STUCK_TIMEOUT_MS", 120000L);
     private static final long TAIL_STUCK_TIMEOUT_MS = envLong("TASK_TAIL_STUCK_TIMEOUT_MS", 30000L);
     private static final long INACTIVE_TIMEOUT_MS = envLong("TASK_INACTIVE_TIMEOUT_MS", 20000L);
+    private static final long SUPPORT_CLEANUP_IDLE_MS = envLong("TASK_SUPPORT_CLEANUP_IDLE_MS", 3000L);
     private static final long WORLD_JOIN_TIMEOUT_MS = envLong("TASK_WORLD_JOIN_TIMEOUT_MS", 90000L);
     private static final int MAX_CELL_ATTEMPTS = envInt("TASK_MAX_CELL_ATTEMPTS", 3, 1, 10);
 
@@ -464,7 +465,8 @@ public final class HiveTaskClient {
         if (active) lastNativeActiveMs = now;
         long idleFor = watchdog.idleFor(now);
         if (task.cleaningSupports) {
-            if ((!active && now - lastNativeActiveMs >= INACTIVE_TIMEOUT_MS) || idleFor >= STUCK_TIMEOUT_MS) {
+            if ((!active && now - lastNativeActiveMs >= SUPPORT_CLEANUP_IDLE_MS)
+                    || idleFor >= SUPPORT_CLEANUP_IDLE_MS) {
                 sendEvent("Left " + remaining + " unreachable temporary support block(s); continuing without rebuilding them.");
                 completeCurrentCell();
             }
@@ -515,8 +517,29 @@ public final class HiveTaskClient {
             sendEvent("Terrain cleared; descending the recorded scaffold before cleanup pathing.");
             return;
         }
-        sendEvent("Deferred " + supports.size() + " non-underfoot scaffold block(s); continuing terrain mining without cleanup pathing.");
-        completeCurrentCell();
+        startSupportBuilderCleanup();
+    }
+
+    private void startSupportBuilderCleanup() {
+        if (task == null || task.currentCell == null || MC.player == null) return;
+        pruneSnapshot();
+        if (task.cellSnapshot.isEmpty()) {
+            completeCurrentCell();
+            return;
+        }
+        task.descendingSupports = false;
+        configureBreakOnlySettings();
+        MiningSafety.armSupportCleanup(task.cellSnapshot);
+        long now = System.currentTimeMillis();
+        watchdog.reset(now, MC.player.position(), task.cellSnapshot.size());
+        lastNativeActiveMs = now;
+        Cuboid scaffoldColumn = currentScaffoldColumn();
+        primaryBaritone().getBuilderProcess().clearArea(
+            new BlockPos(scaffoldColumn.x1, scaffoldColumn.y1, scaffoldColumn.z1),
+            new BlockPos(scaffoldColumn.x2, scaffoldColumn.y2, scaffoldColumn.z2)
+        );
+        sendEvent("Removing up to " + task.cellSnapshot.size()
+            + " reachable scaffold block(s); cleanup aborts after 3 seconds without progress.");
     }
 
     private void tickSupportDescent(long now, LocalPlayer player) {
@@ -532,7 +555,7 @@ public final class HiveTaskClient {
                 task.descendingSupports = false;
                 task.cellSnapshot.remove(support.asLong());
                 MiningSafety.replaceSnapshot(task.cellSnapshot);
-                completeCurrentCell();
+                startSupportBuilderCleanup();
                 return;
             }
             var controller = primaryBaritone().getPlayerContext().playerController();
@@ -549,10 +572,10 @@ public final class HiveTaskClient {
         if (player.onGround()) {
             int deferred = task.cellSnapshot.size();
             if (deferred > 0) {
-                sendEvent("Support descent completed; deferred " + deferred
-                    + " unreachable side scaffold block(s) and continued terrain mining.");
+                sendEvent("Support descent completed; attempting bounded cleanup of " + deferred
+                    + " side scaffold block(s).");
             }
-            completeCurrentCell();
+            startSupportBuilderCleanup();
         }
     }
 
@@ -945,6 +968,7 @@ public final class HiveTaskClient {
     }
 
     private void configureTravelSettings() {
+        BaritoneAPI.getSettings().blockReachDistance.value = 3.0F;
         BaritoneAPI.getSettings().allowBreak.value = false;
         BaritoneAPI.getSettings().allowPlace.value = false;
         BaritoneAPI.getSettings().allowParkour.value = false;
@@ -955,6 +979,7 @@ public final class HiveTaskClient {
     }
 
     private void configureMiningSettings() {
+        BaritoneAPI.getSettings().blockReachDistance.value = 3.0F;
         BaritoneAPI.getSettings().allowBreak.value = true;
         BaritoneAPI.getSettings().allowPlace.value = true;
         BaritoneAPI.getSettings().allowParkour.value = false;
