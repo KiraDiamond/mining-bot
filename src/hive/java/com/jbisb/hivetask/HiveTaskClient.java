@@ -273,6 +273,7 @@ public final class HiveTaskClient {
         task.currentCell = next;
         task.travelAttempts = 0;
         task.cleaningSupports = false;
+        task.descendingSupports = false;
         task.cellSnapshot.clear();
         task.cellPassMined = 0;
         beginTravel(next.center(), true);
@@ -328,6 +329,9 @@ public final class HiveTaskClient {
             lastAccessAttemptMs = now;
             sendEvent("Opened a nearby access block and retried the same non-destructive route.");
             beginTravel(destination, task.travelToCell);
+        } else if (idleFor >= INACTIVE_TIMEOUT_MS
+            && beginRouteDescent("Route is stranded on an underfoot block; descending inside the assigned cuboid.")) {
+            return;
         } else if (!active && now - stageSinceMs >= INACTIVE_TIMEOUT_MS) {
             recoverTravel("Native Baritone stopped before reaching the destination.");
         } else if (idleFor >= STUCK_TIMEOUT_MS) {
@@ -362,6 +366,13 @@ public final class HiveTaskClient {
         return false;
     }
 
+    private boolean beginRouteDescent(String reason) {
+        if (task == null || task.kind != TaskKind.MINE_CUBOID || task.travelDestination == null) return false;
+        task.escapeDestination = task.travelDestination;
+        blocker = reason;
+        return beginEscapeDescent();
+    }
+
     private boolean currentCellChunksLoaded() {
         if (MC.level == null || task == null || task.currentCell == null) return false;
         Cuboid cell = task.currentCell;
@@ -376,9 +387,10 @@ public final class HiveTaskClient {
         cancelNative();
         task.travelAttempts = 0;
         task.cleaningSupports = false;
+        task.descendingSupports = false;
         task.escapeSnapshot.clear();
         configureMiningSettings();
-        Map<Long, Block> snapshot = snapshotCell(task.currentCell);
+        Map<Long, Block> snapshot = snapshotCell(task.currentCell, true);
         task.cellSnapshot.clear();
         task.cellSnapshot.putAll(snapshot);
         task.cellInitialBlocks = snapshot.size();
@@ -400,6 +412,10 @@ public final class HiveTaskClient {
     }
 
     private Map<Long, Block> snapshotCell(Cuboid cell) {
+        return snapshotCell(cell, false);
+    }
+
+    private Map<Long, Block> snapshotCell(Cuboid cell, boolean excludePlacedSupports) {
         Map<Long, Block> snapshot = new HashMap<>();
         Set<Block> dynamicProtected = new HashSet<>(MiningSafety.protectedBlocks());
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
@@ -409,7 +425,7 @@ public final class HiveTaskClient {
                     pos.set(x, y, z);
                     BlockState state = MC.level.getBlockState(pos);
                     if (state.isAir() || !state.getFluidState().isEmpty()) continue;
-                    if (MiningSafety.isPlacedSupport(pos, state)) continue;
+                    if (excludePlacedSupports && MiningSafety.isPlacedSupport(pos, state)) continue;
                     Block block = state.getBlock();
                     if (MiningSafety.isProtected(block) || MC.level.getBlockEntity(pos) != null) {
                         dynamicProtected.add(block);
@@ -432,6 +448,10 @@ public final class HiveTaskClient {
         if (now - lastSnapshotCheckMs >= 500L) {
             lastSnapshotCheckMs = now;
             pruneSnapshot();
+        }
+        if (task.descendingSupports) {
+            tickSupportDescent(now, player);
+            return;
         }
         int remaining = task.cellSnapshot.size();
         watchdog.observe(now, player.position(), remaining);
@@ -480,6 +500,7 @@ public final class HiveTaskClient {
 
         cancelNative();
         task.cleaningSupports = true;
+        task.descendingSupports = false;
         task.cellSnapshot.clear();
         task.cellSnapshot.putAll(supports);
         configureBreakOnlySettings();
@@ -487,11 +508,65 @@ public final class HiveTaskClient {
         setStage(Stage.MINING, "Cleaning temporary supports without placement.");
         watchdog.reset(stageSinceMs, MC.player.position(), supports.size());
         lastNativeActiveMs = stageSinceMs;
+        task.escapeBreakTarget = null;
+
+        BlockPos underfoot = MC.player.blockPosition().below();
+        if (supports.containsKey(underfoot.asLong())) {
+            task.descendingSupports = true;
+            sendEvent("Terrain cleared; descending the recorded scaffold before cleanup pathing.");
+            return;
+        }
+        startSupportBuilderCleanup();
+    }
+
+    private void startSupportBuilderCleanup() {
+        if (task == null || task.currentCell == null || MC.player == null) return;
+        pruneSnapshot();
+        if (task.cellSnapshot.isEmpty()) {
+            completeCurrentCell();
+            return;
+        }
+        task.descendingSupports = false;
+        configureBreakOnlySettings();
+        MiningSafety.armSupportCleanup(task.cellSnapshot);
+        watchdog.reset(System.currentTimeMillis(), MC.player.position(), task.cellSnapshot.size());
+        lastNativeActiveMs = System.currentTimeMillis();
+        Cuboid scaffoldColumn = currentScaffoldColumn();
         primaryBaritone().getBuilderProcess().clearArea(
             new BlockPos(scaffoldColumn.x1, scaffoldColumn.y1, scaffoldColumn.z1),
             new BlockPos(scaffoldColumn.x2, scaffoldColumn.y2, scaffoldColumn.z2)
         );
-        sendEvent("Terrain cleared; removing " + supports.size() + " recorded scaffold block(s) with placement disabled.");
+        sendEvent("Removing " + task.cellSnapshot.size() + " recorded scaffold block(s) from ground-safe cleanup with placement disabled.");
+    }
+
+    private void tickSupportDescent(long now, LocalPlayer player) {
+        int remaining = task.cellSnapshot.size();
+        watchdog.observe(now, player.position(), remaining);
+        BlockPos support = player.blockPosition().below();
+        Block expected = task.cellSnapshot.get(support.asLong());
+        if (expected != null && MC.level.getBlockState(support).getBlock() == expected) {
+            BlockState state = MC.level.getBlockState(support);
+            if (!selectSupportBreakTool(state)) {
+                sendEvent("Could not safely tool the underfoot scaffold; leaving it and continuing instead of freezing.");
+                resetDirectBreak();
+                task.descendingSupports = false;
+                task.cellSnapshot.remove(support.asLong());
+                MiningSafety.replaceSnapshot(task.cellSnapshot);
+                startSupportBuilderCleanup();
+                return;
+            }
+            var controller = primaryBaritone().getPlayerContext().playerController();
+            if (!support.equals(task.escapeBreakTarget)) {
+                controller.resetBlockRemoving();
+                task.escapeBreakTarget = support.immutable();
+                controller.clickBlock(support, Direction.UP);
+            } else {
+                controller.onPlayerDamageBlock(support, Direction.UP);
+            }
+            return;
+        }
+        resetDirectBreak();
+        if (player.onGround()) startSupportBuilderCleanup();
     }
 
     private void escapeOrRecover(String reason) {
@@ -631,7 +706,16 @@ public final class HiveTaskClient {
             playerPos.getX(), playerPos.getY() - 1, playerPos.getZ()
         );
         Map<Long, Block> snapshot = snapshotCell(column);
-        if (snapshot.isEmpty()) return false;
+        BlockPos underfoot = playerPos.below();
+        BlockState underfootState = MC.level.getBlockState(underfoot);
+        if (task.cuboid.contains(underfoot)
+                && !underfootState.isAir()
+                && underfootState.getDestroySpeed(MC.level, underfoot) >= 0.0F
+                && !MiningSafety.isProtected(underfootState.getBlock())
+                && MC.level.getBlockEntity(underfoot) == null) {
+            snapshot.put(underfoot.asLong(), underfootState.getBlock());
+        }
+        if (snapshot.isEmpty() || !snapshot.containsKey(playerPos.below().asLong())) return false;
 
         cancelNative();
         task.escapeSnapshot.clear();
@@ -665,7 +749,7 @@ public final class HiveTaskClient {
         Block expected = task.escapeSnapshot.get(support.asLong());
         if (expected != null && MC.level.getBlockState(support).getBlock() == expected) {
             BlockState state = MC.level.getBlockState(support);
-            if (!selectSafeHotbarTool(state)) {
+            if (!selectSupportBreakTool(state)) {
                 resetDirectBreak();
                 recover("No safe hotbar tool can clear the snapshotted support block.");
                 return;
@@ -697,6 +781,19 @@ public final class HiveTaskClient {
         MC.player.getInventory().setSelectedSlot(slot);
         primaryBaritone().getPlayerContext().playerController().syncHeldItem();
         return true;
+    }
+
+    private boolean selectSupportBreakTool(BlockState state) {
+        if (selectSafeHotbarTool(state)) return true;
+        if (MC.player == null) return false;
+        for (int slot = 0; slot < 9; slot++) {
+            ItemStack stack = MC.player.getInventory().getItem(slot);
+            if (!stack.isEmpty() && stack.isDamageableItem()) continue;
+            MC.player.getInventory().setSelectedSlot(slot);
+            primaryBaritone().getPlayerContext().playerController().syncHeldItem();
+            return true;
+        }
+        return false;
     }
 
     private void resetDirectBreak() {
@@ -752,6 +849,7 @@ public final class HiveTaskClient {
         cancelNative();
         MiningSafety.disarmBreaking();
         task.cleaningSupports = false;
+        task.descendingSupports = false;
         task.completedCells++;
         task.failedAttempts.remove(task.currentCell.toString());
         task.escapeAttempted.remove(task.currentCell.toString());
@@ -1065,6 +1163,7 @@ public final class HiveTaskClient {
         private boolean escapeClearing;
         private boolean escapeDescending;
         private boolean cleaningSupports;
+        private boolean descendingSupports;
         private Cuboid currentCell;
         private BlockPos travelDestination;
         private BlockPos escapeDestination;
