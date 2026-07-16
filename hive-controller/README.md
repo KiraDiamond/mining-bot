@@ -159,6 +159,8 @@ Cuboid mining is split by Y layer and executed through Baritone `sel pos1`, `sel
 clear 100 50 100 130 80 130 all
 ```
 
+Travel to a mining cell is non-destructive: breaking and placing remain disabled. If a bot stalls beside a closed door, fence gate, or trapdoor, it may open that access block and retry the same route; it never advances to another cell merely because the route stalled.
+
 The client mod stops if the selected tool or elytra reaches `5` durability and no safer hotbar item is available.
 
 ### CachyOS Deploy

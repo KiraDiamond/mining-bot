@@ -14,9 +14,16 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.DoorBlock;
+import net.minecraft.world.level.block.FenceGateBlock;
+import net.minecraft.world.level.block.TrapDoorBlock;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 
 import java.io.BufferedReader;
@@ -68,6 +75,7 @@ public final class HiveTaskClient {
     private long lastRespawnAttemptMs;
     private long lastNativeActiveMs;
     private long lastSettingsEnforceMs;
+    private long lastAccessAttemptMs;
     private boolean worldTimeoutTriggered;
     private String blocker = "";
 
@@ -263,6 +271,7 @@ public final class HiveTaskClient {
             return;
         }
         task.currentCell = next;
+        task.travelAttempts = 0;
         task.cellSnapshot.clear();
         task.cellPassMined = 0;
         beginTravel(next.center(), true);
@@ -311,11 +320,45 @@ public final class HiveTaskClient {
 
         boolean active = primaryBaritone().getCustomGoalProcess().isActive();
         if (active) lastNativeActiveMs = now;
-        if (!active && now - stageSinceMs >= INACTIVE_TIMEOUT_MS) {
-            recover("Native Baritone stopped before reaching the destination.");
-        } else if (watchdog.idleFor(now) >= STUCK_TIMEOUT_MS) {
-            recover("No walking progress for " + STUCK_TIMEOUT_MS / 1000L + " seconds.");
+        long idleFor = watchdog.idleFor(now);
+        if (idleFor >= INACTIVE_TIMEOUT_MS
+            && now - lastAccessAttemptMs >= 5000L
+            && tryOpenNearbyAccess(player)) {
+            lastAccessAttemptMs = now;
+            sendEvent("Opened a nearby access block and retried the same non-destructive route.");
+            beginTravel(destination, task.travelToCell);
+        } else if (!active && now - stageSinceMs >= INACTIVE_TIMEOUT_MS) {
+            recoverTravel("Native Baritone stopped before reaching the destination.");
+        } else if (idleFor >= STUCK_TIMEOUT_MS) {
+            recoverTravel("No walking progress for " + STUCK_TIMEOUT_MS / 1000L + " seconds.");
         }
+    }
+
+    private boolean tryOpenNearbyAccess(LocalPlayer player) {
+        if (MC.level == null) return false;
+        BlockPos origin = player.blockPosition();
+        BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+        for (int y = -1; y <= 2; y++) {
+            for (int x = -2; x <= 2; x++) {
+                for (int z = -2; z <= 2; z++) {
+                    cursor.set(origin.getX() + x, origin.getY() + y, origin.getZ() + z);
+                    BlockState state = MC.level.getBlockState(cursor);
+                    Block block = state.getBlock();
+                    if (!(block instanceof DoorBlock || block instanceof FenceGateBlock || block instanceof TrapDoorBlock)
+                        || !state.hasProperty(BlockStateProperties.OPEN)
+                        || state.getValue(BlockStateProperties.OPEN)) {
+                        continue;
+                    }
+                    BlockPos target = cursor.immutable();
+                    BlockHitResult hit = new BlockHitResult(Vec3.atCenterOf(target), Direction.UP, target, false);
+                    primaryBaritone().getPlayerContext().playerController().processRightClickBlock(
+                        player, MC.level, InteractionHand.MAIN_HAND, hit
+                    );
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private boolean currentCellChunksLoaded() {
@@ -330,6 +373,7 @@ public final class HiveTaskClient {
     private void startMiningCell() {
         if (task == null || task.currentCell == null || MC.level == null || MC.player == null) return;
         cancelNative();
+        task.travelAttempts = 0;
         task.escapeSnapshot.clear();
         configureMiningSettings();
         Map<Long, Block> snapshot = snapshotCell(task.currentCell);
@@ -713,9 +757,27 @@ public final class HiveTaskClient {
         setStage(Stage.RECOVERING, reason);
     }
 
+    private void recoverTravel(String reason) {
+        if (task == null || !task.travelToCell || task.currentCell == null) {
+            recover(reason);
+            return;
+        }
+        cancelNative();
+        MiningSafety.disarmBreaking();
+        blocker = reason;
+        int attempt = ++task.travelAttempts;
+        if (attempt > MAX_CELL_ATTEMPTS) {
+            recover(reason);
+            return;
+        }
+        setStage(Stage.RECOVERING, reason + " Route retry " + attempt + "/" + MAX_CELL_ATTEMPTS + ".");
+        sendEvent(blocker);
+    }
+
     private void retryCurrentWork() {
         if (task == null) return;
         if (task.kind == TaskKind.GOTO) beginTravel(task.destination, false);
+        else if (task.currentCell != null) beginTravel(task.currentCell.center(), true);
         else beginNextCell();
     }
 
