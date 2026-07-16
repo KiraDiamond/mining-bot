@@ -3,8 +3,9 @@ package com.jbisb.hivetask;
 import baritone.api.BaritoneAPI;
 import baritone.api.IBaritone;
 import baritone.api.pathing.goals.GoalBlock;
-import baritone.api.pathing.goals.GoalNear;
 import baritone.api.pathing.goals.GoalXZ;
+import baritone.api.utils.RayTraceUtils;
+import baritone.api.utils.RotationUtils;
 import baritone.utils.ToolSet;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
@@ -31,6 +32,7 @@ import net.minecraft.world.level.block.TrapDoorBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 
@@ -69,6 +71,7 @@ public final class HiveTaskClient {
     private static final long STUCK_TIMEOUT_MS = envLong("TASK_STUCK_TIMEOUT_MS", 120000L);
     private static final long TAIL_STUCK_TIMEOUT_MS = envLong("TASK_TAIL_STUCK_TIMEOUT_MS", 30000L);
     private static final long INACTIVE_TIMEOUT_MS = envLong("TASK_INACTIVE_TIMEOUT_MS", 20000L);
+    private static final long DIRECT_BREAK_FALLBACK_MS = envLong("TASK_DIRECT_BREAK_FALLBACK_MS", 5000L);
     private static final long SUPPORT_CLEANUP_IDLE_MS = envLong("TASK_SUPPORT_CLEANUP_IDLE_MS", 3000L);
     private static final long WORLD_JOIN_TIMEOUT_MS = envLong("TASK_WORLD_JOIN_TIMEOUT_MS", 90000L);
     private static final int MAX_CELL_ATTEMPTS = envInt("TASK_MAX_CELL_ATTEMPTS", 3, 1, 10);
@@ -544,8 +547,12 @@ public final class HiveTaskClient {
                 completeCurrentCell();
                 return;
             }
-            BlockPos center = task.currentCell.center();
-            destination = new BlockPos(center.getX(), task.currentCell.y2 + 1, center.getZ());
+            BlockPos playerPos = MC.player.blockPosition();
+            destination = new BlockPos(
+                clamp(playerPos.getX(), task.currentCell.x1, task.currentCell.x2),
+                task.currentCell.y2 + 1,
+                clamp(playerPos.getZ(), task.currentCell.z1, task.currentCell.z2)
+            );
             MiningSafety.armBreaking(task.cellSnapshot, currentScaffoldColumn());
             if (task.currentCell.containsHorizontal(MC.player.blockPosition())
                     && MiningSafety.hasReachableBreak()) {
@@ -563,7 +570,7 @@ public final class HiveTaskClient {
 
         IBaritone baritone = primaryBaritone();
         if (toMiningCell) {
-            baritone.getCustomGoalProcess().setGoalAndPath(new GoalNear(destination, 2));
+            baritone.getCustomGoalProcess().setGoalAndPath(new GoalBlock(destination));
             sendEvent("Travelling to cell " + task.currentCell
                 + " via " + destination
                 + " with breaking restricted to " + task.cellSnapshot.size() + " snapshotted cell block(s).");
@@ -664,6 +671,8 @@ public final class HiveTaskClient {
         task.travelAttempts = 0;
         task.cleaningSupports = false;
         task.descendingSupports = false;
+        task.directBreakFallback = false;
+        task.directBreakTarget = null;
         task.escapeSnapshot.clear();
         configureMiningSettings();
         Map<Long, Block> snapshot = snapshotCell(task.currentCell, true);
@@ -736,6 +745,10 @@ public final class HiveTaskClient {
             else beginSupportCleanup();
             return;
         }
+        if (task.directBreakFallback) {
+            tickDirectBreakFallback(now, player);
+            return;
+        }
         boolean active = primaryBaritone().getBuilderProcess().isActive();
         if (active) lastNativeActiveMs = now;
         long idleFor = watchdog.idleFor(now);
@@ -747,7 +760,9 @@ public final class HiveTaskClient {
             }
             return;
         }
-        if (!active && now - lastNativeActiveMs >= INACTIVE_TIMEOUT_MS) {
+        if (idleFor >= DIRECT_BREAK_FALLBACK_MS && MiningSafety.hasReachableBreak()) {
+            beginDirectBreakFallback();
+        } else if (!active && now - lastNativeActiveMs >= INACTIVE_TIMEOUT_MS) {
             escapeOrRecover("Native Baritone became inactive with " + remaining + " snapshotted blocks remaining.");
         } else if (remaining <= 4 && idleFor >= TAIL_STUCK_TIMEOUT_MS) {
             recover("Small unreachable tail made no progress for " + TAIL_STUCK_TIMEOUT_MS / 1000L + " seconds.");
@@ -756,6 +771,112 @@ public final class HiveTaskClient {
         } else if (idleFor >= STUCK_TIMEOUT_MS) {
             escapeOrRecover("No movement or mined-block progress for " + STUCK_TIMEOUT_MS / 1000L + " seconds.");
         }
+    }
+
+    private void beginDirectBreakFallback() {
+        if (task == null || task.currentCell == null || task.cellSnapshot.isEmpty() || MC.player == null) return;
+        cancelNative();
+        configureBreakOnlySettings();
+        MiningSafety.armBreaking(task.cellSnapshot);
+        task.directBreakFallback = true;
+        task.directBreakTarget = null;
+        watchdog.reset(System.currentTimeMillis(), MC.player.position(), task.cellSnapshot.size());
+        sendEvent("Builder stalled; completing one reachable block before replanning the cell.");
+    }
+
+    private void tickDirectBreakFallback(long now, LocalPlayer player) {
+        BlockPos previousTarget = task.directBreakTarget;
+        if (previousTarget != null && !task.cellSnapshot.containsKey(previousTarget.asLong())) {
+            resetDirectBreak();
+            task.directBreakFallback = false;
+            if (task.cellSnapshot.isEmpty()) {
+                beginSupportCleanup();
+            } else {
+                restartMiningBuilder();
+            }
+            return;
+        }
+
+        BlockPos target = previousTarget;
+        if (target == null) {
+            target = nearestReachableSnapshotBlock(player);
+            if (target == null) {
+                task.directBreakFallback = false;
+                restartMiningBuilder();
+                return;
+            }
+            task.directBreakTarget = target;
+        }
+
+        var rotation = RotationUtils.reachable(primaryBaritone().getPlayerContext(), target, BLOCK_REACH);
+        if (rotation.isEmpty()) {
+            resetDirectBreak();
+            task.directBreakFallback = false;
+            restartMiningBuilder();
+            return;
+        }
+
+        BlockState state = MC.level.getBlockState(target);
+        if (!selectSupportBreakTool(state)) {
+            resetDirectBreak();
+            task.directBreakFallback = false;
+            recover("No safe tool or empty hand is available for the reachable stalled block.");
+            return;
+        }
+
+        var targetRotation = rotation.get();
+        primaryBaritone().getLookBehavior().updateTarget(targetRotation, true);
+        player.setYRot(targetRotation.getYaw());
+        player.setXRot(targetRotation.getPitch());
+        HitResult trace = RayTraceUtils.rayTraceTowards(player, targetRotation, BLOCK_REACH);
+        if (!(trace instanceof BlockHitResult blockHit) || !target.equals(blockHit.getBlockPos())) {
+            if (watchdog.idleFor(now) >= INACTIVE_TIMEOUT_MS) {
+                resetDirectBreak();
+                task.directBreakFallback = false;
+                restartMiningBuilder();
+            }
+            return;
+        }
+
+        var controller = primaryBaritone().getPlayerContext().playerController();
+        if (!target.equals(previousTarget)) {
+            controller.resetBlockRemoving();
+            controller.clickBlock(target, blockHit.getDirection());
+        } else {
+            controller.onPlayerDamageBlock(target, blockHit.getDirection());
+        }
+        player.swing(InteractionHand.MAIN_HAND);
+    }
+
+    private BlockPos nearestReachableSnapshotBlock(LocalPlayer player) {
+        BlockPos nearest = null;
+        double nearestDistance = Double.POSITIVE_INFINITY;
+        for (long key : task.cellSnapshot.keySet()) {
+            BlockPos candidate = BlockPos.of(key);
+            if (RotationUtils.reachable(primaryBaritone().getPlayerContext(), candidate, BLOCK_REACH).isEmpty()) {
+                continue;
+            }
+            double distance = player.getEyePosition(1.0F).distanceToSqr(Vec3.atCenterOf(candidate));
+            if (distance < nearestDistance) {
+                nearest = candidate;
+                nearestDistance = distance;
+            }
+        }
+        return nearest;
+    }
+
+    private void restartMiningBuilder() {
+        if (task == null || task.currentCell == null || task.cellSnapshot.isEmpty() || MC.player == null) return;
+        cancelNative();
+        configureMiningSettings();
+        MiningSafety.armBreaking(task.cellSnapshot, currentScaffoldColumn());
+        setStage(Stage.MINING, "");
+        watchdog.reset(stageSinceMs, MC.player.position(), task.cellSnapshot.size());
+        lastNativeActiveMs = stageSinceMs;
+        primaryBaritone().getBuilderProcess().clearArea(
+            new BlockPos(task.currentCell.x1, task.currentCell.y1, task.currentCell.z1),
+            new BlockPos(task.currentCell.x2, task.currentCell.y2, task.currentCell.z2)
+        );
     }
 
     private Cuboid currentScaffoldColumn() {
@@ -1082,7 +1203,10 @@ public final class HiveTaskClient {
     }
 
     private void resetDirectBreak() {
-        if (task != null) task.escapeBreakTarget = null;
+        if (task != null) {
+            task.escapeBreakTarget = null;
+            task.directBreakTarget = null;
+        }
         try {
             primaryBaritone().getPlayerContext().playerController().resetBlockRemoving();
         } catch (RuntimeException ignored) {
@@ -1309,6 +1433,8 @@ public final class HiveTaskClient {
         }
         if (task != null) {
             task.escapeBreakTarget = null;
+            task.directBreakTarget = null;
+            task.directBreakFallback = false;
         }
         MiningSafety.releaseBreakTarget(null);
     }
@@ -1475,10 +1601,12 @@ public final class HiveTaskClient {
         private boolean escapeDescending;
         private boolean cleaningSupports;
         private boolean descendingSupports;
+        private boolean directBreakFallback;
         private Cuboid currentCell;
         private BlockPos travelDestination;
         private BlockPos escapeDestination;
         private BlockPos escapeBreakTarget;
+        private BlockPos directBreakTarget;
         private int totalCells;
         private int completedCells;
         private int travelAttempts;
