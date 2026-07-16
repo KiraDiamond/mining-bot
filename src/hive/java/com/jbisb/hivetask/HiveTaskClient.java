@@ -2,7 +2,9 @@ package com.jbisb.hivetask;
 
 import baritone.api.BaritoneAPI;
 import baritone.api.IBaritone;
+import baritone.api.pathing.goals.Goal;
 import baritone.api.pathing.goals.GoalBlock;
+import baritone.api.pathing.goals.GoalComposite;
 import baritone.api.pathing.goals.GoalXZ;
 import baritone.api.utils.RayTraceUtils;
 import baritone.api.utils.RotationUtils;
@@ -567,7 +569,7 @@ public final class HiveTaskClient {
 
         IBaritone baritone = primaryBaritone();
         if (toMiningCell) {
-            baritone.getCustomGoalProcess().setGoalAndPath(new GoalBlock(destination));
+            baritone.getCustomGoalProcess().setGoalAndPath(miningTravelGoal(destination));
             sendEvent("Travelling to cell " + task.currentCell
                 + " via " + destination
                 + " with breaking restricted to " + task.cellSnapshot.size() + " snapshotted cell block(s).");
@@ -589,7 +591,7 @@ public final class HiveTaskClient {
                 return;
             }
             if (task.currentCell != null
-                    && player.blockPosition().equals(destination)
+                    && reachedMiningTravelGoal(player.blockPosition(), destination)
                     && currentCellChunksLoaded()) {
                 startMiningCell();
                 return;
@@ -937,15 +939,20 @@ public final class HiveTaskClient {
 
     private BlockPos nearestOpenCellAccess(List<BlockPos> candidates, BlockPos playerPos, BlockPos preferredTarget) {
         BlockPos nearest = null;
+        boolean nearestHasFooting = false;
         double nearestTargetDistance = Double.POSITIVE_INFINITY;
         double nearestDistance = Double.POSITIVE_INFINITY;
         for (BlockPos candidate : candidates) {
             if (!task.cuboid.contains(candidate) || !isOpenCellAccess(candidate)) continue;
+            boolean hasFooting = hasStableFooting(candidate);
             double targetDistance = preferredTarget == null ? 0.0D : candidate.distSqr(preferredTarget);
             double distance = candidate.distSqr(playerPos);
-            if (targetDistance < nearestTargetDistance
-                    || (targetDistance == nearestTargetDistance && distance < nearestDistance)) {
+            if ((hasFooting && !nearestHasFooting)
+                    || (hasFooting == nearestHasFooting
+                        && (targetDistance < nearestTargetDistance
+                            || (targetDistance == nearestTargetDistance && distance < nearestDistance)))) {
                 nearest = candidate;
+                nearestHasFooting = hasFooting;
                 nearestTargetDistance = targetDistance;
                 nearestDistance = distance;
             }
@@ -973,6 +980,37 @@ public final class HiveTaskClient {
         BlockState head = MC.level.getBlockState(pos.above());
         return (feet.isAir() || feet.canBeReplaced())
             && (head.isAir() || head.canBeReplaced());
+    }
+
+    private boolean hasStableFooting(BlockPos pos) {
+        if (MC.level == null) return false;
+        BlockState below = MC.level.getBlockState(pos.below());
+        return !below.isAir() && !below.canBeReplaced() && below.getFluidState().isEmpty();
+    }
+
+    private Goal miningTravelGoal(BlockPos destination) {
+        List<Goal> goals = new ArrayList<>();
+        addMiningTravelGoal(goals, destination);
+        addMiningTravelGoal(goals, destination.north());
+        addMiningTravelGoal(goals, destination.south());
+        addMiningTravelGoal(goals, destination.west());
+        addMiningTravelGoal(goals, destination.east());
+        if (goals.isEmpty()) return new GoalBlock(destination);
+        if (goals.size() == 1) return goals.getFirst();
+        return new GoalComposite(goals.toArray(Goal[]::new));
+    }
+
+    private void addMiningTravelGoal(List<Goal> goals, BlockPos candidate) {
+        if (task == null || task.cuboid == null || !task.cuboid.contains(candidate)) return;
+        if (!isOpenCellAccess(candidate) || !hasStableFooting(candidate)) return;
+        goals.add(new GoalBlock(candidate));
+    }
+
+    private boolean reachedMiningTravelGoal(BlockPos playerPos, BlockPos destination) {
+        if (playerPos.getY() != destination.getY()) return false;
+        int dx = Math.abs(playerPos.getX() - destination.getX());
+        int dz = Math.abs(playerPos.getZ() - destination.getZ());
+        return dx + dz <= 1;
     }
 
     private void beginSupportCleanup() {
