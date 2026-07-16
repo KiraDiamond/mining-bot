@@ -48,6 +48,7 @@ public final class HiveTaskClient {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MAX_CLIENT_WORK_PER_TICK = 8;
     private static final int CELL_SIZE = envInt("TASK_CELL_SIZE", 12, 4, 32);
+    private static final int LAYER_HEIGHT = envInt("TASK_LAYER_HEIGHT", 5, 2, 8);
     private static final int ARRIVAL_RADIUS = envInt("TASK_ARRIVAL_RADIUS", 24, 4, 32);
     private static final long STATUS_INTERVAL_MS = envLong("TASK_STATUS_INTERVAL_MS", 10000L);
     private static final long STUCK_TIMEOUT_MS = envLong("TASK_STUCK_TIMEOUT_MS", 120000L);
@@ -169,7 +170,7 @@ public final class HiveTaskClient {
             return;
         }
         if (!task.cellsInitialized) {
-            task.cells.addAll(task.cuboid.cells(CELL_SIZE, player.blockPosition()));
+            task.cells.addAll(task.cuboid.cells(CELL_SIZE, LAYER_HEIGHT, player.blockPosition()));
             task.totalCells = task.cells.size();
             task.cellsInitialized = true;
             sendEvent("Prepared " + task.totalCells + " non-overlapping mining cells for " + task.cuboid + ".");
@@ -322,7 +323,7 @@ public final class HiveTaskClient {
             return;
         }
 
-        MiningSafety.armBreaking(task.cellSnapshot);
+        MiningSafety.armBreaking(task.cellSnapshot, task.currentCell);
         setStage(Stage.MINING, "");
         watchdog.reset(stageSinceMs, MC.player.position(), task.cellSnapshot.size());
         lastNativeActiveMs = stageSinceMs;
@@ -425,7 +426,7 @@ public final class HiveTaskClient {
 
         task.escapeClearing = true;
         task.escapeDescending = false;
-        configureMiningSettings();
+        configureBreakOnlySettings();
         MiningSafety.armBreaking(task.escapeSnapshot);
         setStage(Stage.ESCAPING, reason);
         watchdog.reset(stageSinceMs, MC.player.position(), snapshot.size());
@@ -531,7 +532,7 @@ public final class HiveTaskClient {
         task.escapeSnapshot.putAll(snapshot);
         task.escapeClearing = false;
         task.escapeDescending = true;
-        configureMiningSettings();
+        configureBreakOnlySettings();
         MiningSafety.armBreaking(task.escapeSnapshot);
         setStage(Stage.ESCAPING, blocker);
         watchdog.reset(stageSinceMs, MC.player.position(), snapshot.size());
@@ -745,7 +746,7 @@ public final class HiveTaskClient {
 
     private void configureMiningSettings() {
         BaritoneAPI.getSettings().allowBreak.value = true;
-        BaritoneAPI.getSettings().allowPlace.value = false;
+        BaritoneAPI.getSettings().allowPlace.value = true;
         BaritoneAPI.getSettings().allowParkour.value = false;
         BaritoneAPI.getSettings().allowParkourPlace.value = false;
         BaritoneAPI.getSettings().itemSaver.value = true;
@@ -753,10 +754,16 @@ public final class HiveTaskClient {
         applyProtectedBlocks(new HashSet<>(MiningSafety.protectedBlocks()));
     }
 
+    private void configureBreakOnlySettings() {
+        configureMiningSettings();
+        BaritoneAPI.getSettings().allowPlace.value = false;
+    }
+
     private void enforceStageSettings() {
-        if (stage == Stage.MINING
-                || (stage == Stage.ESCAPING && task != null && (task.escapeClearing || task.escapeDescending))) {
+        if (stage == Stage.MINING) {
             configureMiningSettings();
+        } else if (stage == Stage.ESCAPING && task != null && (task.escapeClearing || task.escapeDescending)) {
+            configureBreakOnlySettings();
         }
         else configureTravelSettings();
     }

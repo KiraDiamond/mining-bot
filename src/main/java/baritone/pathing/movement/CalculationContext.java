@@ -183,6 +183,9 @@ public class CalculationContext {
     }
 
     public double costOfPlacingAt(int x, int y, int z, BlockState current) {
+        if (!MiningSafety.canPlanPlace(x, y, z)) {
+            return COST_INF;
+        }
         if (!hasThrowaway) { // only true if allowPlace is true, see constructor
             return COST_INF;
         }

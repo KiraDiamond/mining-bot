@@ -1132,8 +1132,8 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
 
         @Override
         public double costOfPlacingAt(int x, int y, int z, BlockState current) {
-            // Clear-area jobs must not plan scaffolding when placement is disabled.
-            if (!Baritone.settings().allowPlace.value) {
+            // Clear-area scaffolding is confined to the controller-owned active cell.
+            if (!Baritone.settings().allowPlace.value || !MiningSafety.canPlanPlace(x, y, z)) {
                 return COST_INF;
             }
             if (isPossiblyProtected(x, y, z) || !worldBorder.canPlaceAt(x, z)) { // make calculation fail properly if we can't build

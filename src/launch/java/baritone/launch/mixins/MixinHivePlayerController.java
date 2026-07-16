@@ -37,7 +37,7 @@ public abstract class MixinHivePlayerController {
         BlockHitResult hit,
         CallbackInfoReturnable<InteractionResult> callback
     ) {
-        if (!MiningSafety.canUseItem(player.getItemInHand(hand), hit.getBlockPos())) {
+        if (!MiningSafety.canUseItem(player.getItemInHand(hand), hit)) {
             callback.setReturnValue(InteractionResult.FAIL);
         }
     }

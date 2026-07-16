@@ -34,9 +34,13 @@ final class Cuboid {
     }
 
     boolean contains(BlockPos pos) {
-        return pos.getX() >= x1 && pos.getX() <= x2
-            && pos.getY() >= y1 && pos.getY() <= y2
-            && pos.getZ() >= z1 && pos.getZ() <= z2;
+        return contains(pos.getX(), pos.getY(), pos.getZ());
+    }
+
+    boolean contains(int x, int y, int z) {
+        return x >= x1 && x <= x2
+            && y >= y1 && y <= y2
+            && z >= z1 && z <= z2;
     }
 
     boolean intersects(Cuboid other) {
@@ -54,16 +58,29 @@ final class Cuboid {
     }
 
     List<Cuboid> cells(int horizontalSize, BlockPos nearestTo) {
+        return cells(horizontalSize, y2 - y1 + 1, nearestTo);
+    }
+
+    List<Cuboid> cells(int horizontalSize, int verticalSize, BlockPos nearestTo) {
         if (horizontalSize < 1) throw new IllegalArgumentException("horizontalSize must be positive");
-        List<Cuboid> cells = new ArrayList<>();
+        if (verticalSize < 1) throw new IllegalArgumentException("verticalSize must be positive");
+        List<Cuboid> columns = new ArrayList<>();
         for (int x = x1; x <= x2; x += horizontalSize) {
             int endX = Math.min(x2, x + horizontalSize - 1);
             for (int z = z1; z <= z2; z += horizontalSize) {
                 int endZ = Math.min(z2, z + horizontalSize - 1);
-                cells.add(new Cuboid(x, y1, z, endX, y2, endZ));
+                columns.add(new Cuboid(x, y1, z, endX, y2, endZ));
             }
         }
-        cells.sort(Comparator.comparingDouble(cell -> cell.horizontalDistanceSquared(nearestTo)));
+        columns.sort(Comparator.comparingDouble(cell -> cell.horizontalDistanceSquared(nearestTo)));
+
+        List<Cuboid> cells = new ArrayList<>();
+        for (Cuboid column : columns) {
+            for (int topY = y2; topY >= y1; topY -= verticalSize) {
+                int bottomY = Math.max(y1, topY - verticalSize + 1);
+                cells.add(new Cuboid(column.x1, bottomY, column.z1, column.x2, topY, column.z2));
+            }
+        }
         return cells;
     }
 

@@ -5,11 +5,11 @@ This branch is based on IzumiiKonata Baritone commit `e24f5781` and adds a safet
 ## Guarantees
 
 - Travel is non-destructive: `allowBreak`, `allowPlace`, parkour, and parkour placement are disabled and reasserted once per second.
-- Mining is restricted to an immutable per-cell snapshot. The client controller blocks every break outside that coordinate and blocks every placement packet during a managed task.
+- Mining is restricted to an immutable per-cell snapshot. Temporary scaffolding is allowed only inside the active cell; planning and packet guards block placement everywhere else, and placed supports become guarded cleanup targets.
 - Baritone Builder uses the same coordinate allowlist as the packet gate, so it does not plan forbidden blocks and then stall against the gate.
-- Doors, fence gates, and trapdoors remain usable while placement is blocked.
+- Doors, fence gates, and trapdoors remain usable during non-destructive travel.
 - Chests, barrels, machines, torches, ladders, beds, shulker boxes, signs, hanging signs, and discovered block entities are excluded from snapshots.
-- Two clients split work on the longest horizontal axis and subdivide their slices into non-overlapping 12x12 cells.
+- Two clients split work on the longest horizontal axis and subdivide their slices into non-overlapping 12x12x5 layers, processed top-down within each column.
 - Adjacent cells within 24 blocks hand off directly to the coordinate-gated Builder, avoiding false travel failures when a bot is already inside the mining volume.
 - A bot physically trapped inside its assigned cuboid may clear one small, snapshotted corridor toward the current cell, preserve its support block, then step into the cell non-destructively. If the open side is an unsafe drop, native downward movement may clear only the exact snapshotted support column down to the task floor. General pathing receives the same coordinate allowlist, and placement remains disabled.
 - No movement and no block progress for 120 seconds requeues the cell. Three failed passes mark only that cell blocked and continue the job.
