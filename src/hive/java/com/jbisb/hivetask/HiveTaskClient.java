@@ -901,6 +901,9 @@ public final class HiveTaskClient {
 
     private BlockPos cellAccessDestination(BlockPos playerPos) {
         Cuboid cell = task.currentCell;
+        BlockPos preferredTarget = cell.containsHorizontal(playerPos)
+            ? farthestSnapshotBlock(playerPos)
+            : null;
         int belowY = Math.max(task.cuboid.y1, cell.y1 - 2);
         List<BlockPos> candidates = new ArrayList<>();
         for (int x = cell.x1; x <= cell.x2; x++) {
@@ -908,7 +911,7 @@ public final class HiveTaskClient {
                 candidates.add(new BlockPos(x, belowY, z));
             }
         }
-        BlockPos nearest = nearestOpenCellAccess(candidates, playerPos);
+        BlockPos nearest = nearestOpenCellAccess(candidates, playerPos, preferredTarget);
         if (nearest != null) return nearest;
 
         int accessY = Math.max(task.cuboid.y1, cell.y1 - 1);
@@ -922,7 +925,7 @@ public final class HiveTaskClient {
             candidates.add(new BlockPos(cell.x2 + 1, accessY, z));
         }
 
-        nearest = nearestOpenCellAccess(candidates, playerPos);
+        nearest = nearestOpenCellAccess(candidates, playerPos, preferredTarget);
         if (nearest != null) return nearest;
 
         return new BlockPos(
@@ -932,18 +935,36 @@ public final class HiveTaskClient {
         );
     }
 
-    private BlockPos nearestOpenCellAccess(List<BlockPos> candidates, BlockPos playerPos) {
+    private BlockPos nearestOpenCellAccess(List<BlockPos> candidates, BlockPos playerPos, BlockPos preferredTarget) {
         BlockPos nearest = null;
+        double nearestTargetDistance = Double.POSITIVE_INFINITY;
         double nearestDistance = Double.POSITIVE_INFINITY;
         for (BlockPos candidate : candidates) {
             if (!task.cuboid.contains(candidate) || !isOpenCellAccess(candidate)) continue;
+            double targetDistance = preferredTarget == null ? 0.0D : candidate.distSqr(preferredTarget);
             double distance = candidate.distSqr(playerPos);
-            if (distance < nearestDistance) {
+            if (targetDistance < nearestTargetDistance
+                    || (targetDistance == nearestTargetDistance && distance < nearestDistance)) {
                 nearest = candidate;
+                nearestTargetDistance = targetDistance;
                 nearestDistance = distance;
             }
         }
         return nearest;
+    }
+
+    private BlockPos farthestSnapshotBlock(BlockPos playerPos) {
+        BlockPos farthest = null;
+        double farthestDistance = -1.0D;
+        for (long key : task.cellSnapshot.keySet()) {
+            BlockPos candidate = BlockPos.of(key);
+            double distance = candidate.distSqr(playerPos);
+            if (distance > farthestDistance) {
+                farthest = candidate;
+                farthestDistance = distance;
+            }
+        }
+        return farthest;
     }
 
     private boolean isOpenCellAccess(BlockPos pos) {
