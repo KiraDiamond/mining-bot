@@ -519,7 +519,6 @@ public final class HiveTaskClient {
         task.escapeDestination = null;
         task.escapeClearing = false;
         task.escapeDescending = false;
-        task.travelDestination = destination;
         task.travelToCell = toMiningCell;
         blocker = "";
 
@@ -528,19 +527,28 @@ public final class HiveTaskClient {
             Map<Long, Block> snapshot = snapshotCell(task.currentCell, true);
             task.cellSnapshot.clear();
             task.cellSnapshot.putAll(snapshot);
+            if (currentCellChunksLoaded() && snapshot.isEmpty()) {
+                task.cellInitialBlocks = 0;
+                completeCurrentCell();
+                return;
+            }
+            BlockPos center = task.currentCell.center();
+            destination = new BlockPos(center.getX(), task.currentCell.y2 + 1, center.getZ());
             MiningSafety.armBreaking(task.cellSnapshot);
         } else {
             MiningSafety.disarmBreaking();
             configureTravelSettings();
         }
 
+        task.travelDestination = destination;
         setStage(Stage.TRAVELLING, "");
         watchdog.reset(stageSinceMs, MC.player.position(), 0);
 
         IBaritone baritone = primaryBaritone();
         if (toMiningCell) {
-            baritone.getCustomGoalProcess().setGoalAndPath(new GoalXZ(destination.getX(), destination.getZ()));
+            baritone.getCustomGoalProcess().setGoalAndPath(new GoalBlock(destination));
             sendEvent("Travelling to cell " + task.currentCell
+                + " via " + destination
                 + " with breaking restricted to " + task.cellSnapshot.size() + " snapshotted cell block(s).");
         } else {
             baritone.getCustomGoalProcess().setGoalAndPath(new GoalBlock(destination));
@@ -554,7 +562,7 @@ public final class HiveTaskClient {
         watchdog.observe(now, player.position(), 0);
         if (task.travelToCell) {
             if (task.currentCell != null
-                    && task.currentCell.containsHorizontal(player.blockPosition())
+                    && player.blockPosition().distSqr(destination) <= 4.0D
                     && currentCellChunksLoaded()) {
                 startMiningCell();
                 return;
