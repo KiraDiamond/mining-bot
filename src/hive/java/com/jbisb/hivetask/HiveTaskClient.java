@@ -272,6 +272,7 @@ public final class HiveTaskClient {
         }
         task.currentCell = next;
         task.travelAttempts = 0;
+        task.cleaningSupports = false;
         task.cellSnapshot.clear();
         task.cellPassMined = 0;
         beginTravel(next.center(), true);
@@ -374,6 +375,7 @@ public final class HiveTaskClient {
         if (task == null || task.currentCell == null || MC.level == null || MC.player == null) return;
         cancelNative();
         task.travelAttempts = 0;
+        task.cleaningSupports = false;
         task.escapeSnapshot.clear();
         configureMiningSettings();
         Map<Long, Block> snapshot = snapshotCell(task.currentCell);
@@ -385,10 +387,7 @@ public final class HiveTaskClient {
             return;
         }
 
-        Cuboid scaffoldColumn = new Cuboid(
-            task.currentCell.x1, task.cuboid.y1, task.currentCell.z1,
-            task.currentCell.x2, task.currentCell.y2, task.currentCell.z2
-        );
+        Cuboid scaffoldColumn = currentScaffoldColumn();
         MiningSafety.armBreaking(task.cellSnapshot, scaffoldColumn);
         setStage(Stage.MINING, "");
         watchdog.reset(stageSinceMs, MC.player.position(), task.cellSnapshot.size());
@@ -410,6 +409,7 @@ public final class HiveTaskClient {
                     pos.set(x, y, z);
                     BlockState state = MC.level.getBlockState(pos);
                     if (state.isAir() || !state.getFluidState().isEmpty()) continue;
+                    if (MiningSafety.isPlacedSupport(pos, state)) continue;
                     Block block = state.getBlock();
                     if (MiningSafety.isProtected(block) || MC.level.getBlockEntity(pos) != null) {
                         dynamicProtected.add(block);
@@ -436,13 +436,21 @@ public final class HiveTaskClient {
         int remaining = task.cellSnapshot.size();
         watchdog.observe(now, player.position(), remaining);
         if (remaining == 0) {
-            completeCurrentCell();
+            if (task.cleaningSupports) completeCurrentCell();
+            else beginSupportCleanup();
             return;
         }
 
         boolean active = primaryBaritone().getBuilderProcess().isActive();
         if (active) lastNativeActiveMs = now;
         long idleFor = watchdog.idleFor(now);
+        if (task.cleaningSupports) {
+            if ((!active && now - lastNativeActiveMs >= INACTIVE_TIMEOUT_MS) || idleFor >= STUCK_TIMEOUT_MS) {
+                sendEvent("Left " + remaining + " unreachable temporary support block(s); continuing without rebuilding them.");
+                completeCurrentCell();
+            }
+            return;
+        }
         if (!active && now - lastNativeActiveMs >= INACTIVE_TIMEOUT_MS) {
             escapeOrRecover("Native Baritone became inactive with " + remaining + " snapshotted blocks remaining.");
         } else if (remaining <= 4 && idleFor >= TAIL_STUCK_TIMEOUT_MS) {
@@ -452,6 +460,38 @@ public final class HiveTaskClient {
         } else if (idleFor >= STUCK_TIMEOUT_MS) {
             escapeOrRecover("No movement or mined-block progress for " + STUCK_TIMEOUT_MS / 1000L + " seconds.");
         }
+    }
+
+    private Cuboid currentScaffoldColumn() {
+        return new Cuboid(
+            task.currentCell.x1, task.cuboid.y1, task.currentCell.z1,
+            task.currentCell.x2, task.currentCell.y2, task.currentCell.z2
+        );
+    }
+
+    private void beginSupportCleanup() {
+        if (task == null || task.currentCell == null || MC.player == null) return;
+        Cuboid scaffoldColumn = currentScaffoldColumn();
+        Map<Long, Block> supports = MiningSafety.placedSupports(scaffoldColumn);
+        if (supports.isEmpty()) {
+            completeCurrentCell();
+            return;
+        }
+
+        cancelNative();
+        task.cleaningSupports = true;
+        task.cellSnapshot.clear();
+        task.cellSnapshot.putAll(supports);
+        configureBreakOnlySettings();
+        MiningSafety.armSupportCleanup(task.cellSnapshot);
+        setStage(Stage.MINING, "Cleaning temporary supports without placement.");
+        watchdog.reset(stageSinceMs, MC.player.position(), supports.size());
+        lastNativeActiveMs = stageSinceMs;
+        primaryBaritone().getBuilderProcess().clearArea(
+            new BlockPos(scaffoldColumn.x1, scaffoldColumn.y1, scaffoldColumn.z1),
+            new BlockPos(scaffoldColumn.x2, scaffoldColumn.y2, scaffoldColumn.z2)
+        );
+        sendEvent("Terrain cleared; removing " + supports.size() + " recorded scaffold block(s) with placement disabled.");
     }
 
     private void escapeOrRecover(String reason) {
@@ -711,6 +751,7 @@ public final class HiveTaskClient {
     private void completeCurrentCell() {
         cancelNative();
         MiningSafety.disarmBreaking();
+        task.cleaningSupports = false;
         task.completedCells++;
         task.failedAttempts.remove(task.currentCell.toString());
         task.escapeAttempted.remove(task.currentCell.toString());
@@ -845,7 +886,8 @@ public final class HiveTaskClient {
 
     private void enforceStageSettings() {
         if (stage == Stage.MINING) {
-            configureMiningSettings();
+            if (task != null && task.cleaningSupports) configureBreakOnlySettings();
+            else configureMiningSettings();
         } else if (stage == Stage.ESCAPING && task != null && (task.escapeClearing || task.escapeDescending)) {
             configureBreakOnlySettings();
         }
@@ -1022,6 +1064,7 @@ public final class HiveTaskClient {
         private boolean travelToCell;
         private boolean escapeClearing;
         private boolean escapeDescending;
+        private boolean cleaningSupports;
         private Cuboid currentCell;
         private BlockPos travelDestination;
         private BlockPos escapeDestination;

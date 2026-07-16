@@ -58,6 +58,11 @@ public final class MiningSafety {
         allowedPlacementCell = placementCell;
     }
 
+    static void armSupportCleanup(Map<Long, Block> supports) {
+        ALLOWED_BREAKS.set(Map.copyOf(supports));
+        allowedPlacementCell = null;
+    }
+
     static void disarmBreaking() {
         ALLOWED_BREAKS.set(Map.of());
         allowedPlacementCell = null;
@@ -79,12 +84,27 @@ public final class MiningSafety {
         return new ArrayList<>(PROTECTED_BLOCKS);
     }
 
+    static boolean isPlacedSupport(BlockPos pos, BlockState state) {
+        Block expected = PLACED_SUPPORTS.get(pos.asLong());
+        return expected != null && state.getBlock() == expected;
+    }
+
+    static Map<Long, Block> placedSupports(Cuboid cell) {
+        Map<Long, Block> supports = new HashMap<>();
+        if (MC.level == null || cell == null) return supports;
+        PLACED_SUPPORTS.entrySet().removeIf(entry -> {
+            BlockPos pos = BlockPos.of(entry.getKey());
+            if (MC.level.getBlockState(pos).getBlock() != entry.getValue()) return true;
+            if (cell.contains(pos)) supports.put(entry.getKey(), entry.getValue());
+            return false;
+        });
+        return supports;
+    }
+
     public static boolean canBreak(BlockPos pos) {
         if (!managedTask) return true;
         long key = pos.asLong();
         Block expected = ALLOWED_BREAKS.get().get(key);
-        Cuboid cell = allowedPlacementCell;
-        if (expected == null && cell != null && cell.contains(pos)) expected = PLACED_SUPPORTS.get(key);
         boolean allowed = expected != null && MC.level != null && MC.level.getBlockState(pos).getBlock() == expected;
         if (!allowed) {
             DENIED_BREAKS.incrementAndGet();
@@ -95,10 +115,8 @@ public final class MiningSafety {
 
     public static boolean canPlanBreak(int x, int y, int z) {
         long key = BlockPos.asLong(x, y, z);
-        Cuboid cell = allowedPlacementCell;
         return !managedTask
-            || ALLOWED_BREAKS.get().containsKey(key)
-            || (cell != null && cell.contains(x, y, z) && PLACED_SUPPORTS.containsKey(key));
+            || ALLOWED_BREAKS.get().containsKey(key);
     }
 
     public static boolean canPlanPlace(int x, int y, int z) {
