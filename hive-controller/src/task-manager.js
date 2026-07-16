@@ -29,7 +29,7 @@ const {
 const DEFAULT_LAUNCH_TIMEOUT_MS = 45000;
 const NATIVE_COMMAND_FILE = '/tmp/taskbot-native-command.txt';
 const NATIVE_SAFE_BARITONE_SETTINGS = [
-  'blockReachDistance 3.0',
+  'blockReachDistance 5.5',
   'walkWhileBreaking false',
   'breakFromAbove true',
   'elytraAutoJump true',
