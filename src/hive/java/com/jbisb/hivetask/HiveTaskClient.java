@@ -56,7 +56,6 @@ public final class HiveTaskClient {
     private static final int MAX_CLIENT_WORK_PER_TICK = 8;
     private static final int CELL_SIZE = envInt("TASK_CELL_SIZE", 12, 4, 32);
     private static final int LAYER_HEIGHT = envInt("TASK_LAYER_HEIGHT", 5, 2, 8);
-    private static final int ARRIVAL_RADIUS = envInt("TASK_ARRIVAL_RADIUS", 24, 4, 32);
     private static final long STATUS_INTERVAL_MS = envLong("TASK_STATUS_INTERVAL_MS", 10000L);
     private static final long STUCK_TIMEOUT_MS = envLong("TASK_STUCK_TIMEOUT_MS", 120000L);
     private static final long TAIL_STUCK_TIMEOUT_MS = envLong("TASK_TAIL_STUCK_TIMEOUT_MS", 30000L);
@@ -308,10 +307,10 @@ public final class HiveTaskClient {
         BlockPos destination = task.travelDestination;
         if (destination == null) return;
         watchdog.observe(now, player.position(), 0);
-        double horizontalDistance = horizontalDistance(player.blockPosition(), destination);
-
         if (task.travelToCell) {
-            if (horizontalDistance <= ARRIVAL_RADIUS && currentCellChunksLoaded()) {
+            if (task.currentCell != null
+                    && task.currentCell.containsHorizontal(player.blockPosition())
+                    && currentCellChunksLoaded()) {
                 startMiningCell();
                 return;
             }
@@ -516,27 +515,8 @@ public final class HiveTaskClient {
             sendEvent("Terrain cleared; descending the recorded scaffold before cleanup pathing.");
             return;
         }
-        startSupportBuilderCleanup();
-    }
-
-    private void startSupportBuilderCleanup() {
-        if (task == null || task.currentCell == null || MC.player == null) return;
-        pruneSnapshot();
-        if (task.cellSnapshot.isEmpty()) {
-            completeCurrentCell();
-            return;
-        }
-        task.descendingSupports = false;
-        configureBreakOnlySettings();
-        MiningSafety.armSupportCleanup(task.cellSnapshot);
-        watchdog.reset(System.currentTimeMillis(), MC.player.position(), task.cellSnapshot.size());
-        lastNativeActiveMs = System.currentTimeMillis();
-        Cuboid scaffoldColumn = currentScaffoldColumn();
-        primaryBaritone().getBuilderProcess().clearArea(
-            new BlockPos(scaffoldColumn.x1, scaffoldColumn.y1, scaffoldColumn.z1),
-            new BlockPos(scaffoldColumn.x2, scaffoldColumn.y2, scaffoldColumn.z2)
-        );
-        sendEvent("Removing " + task.cellSnapshot.size() + " recorded scaffold block(s) from ground-safe cleanup with placement disabled.");
+        sendEvent("Deferred " + supports.size() + " non-underfoot scaffold block(s); continuing terrain mining without cleanup pathing.");
+        completeCurrentCell();
     }
 
     private void tickSupportDescent(long now, LocalPlayer player) {
@@ -552,7 +532,7 @@ public final class HiveTaskClient {
                 task.descendingSupports = false;
                 task.cellSnapshot.remove(support.asLong());
                 MiningSafety.replaceSnapshot(task.cellSnapshot);
-                startSupportBuilderCleanup();
+                completeCurrentCell();
                 return;
             }
             var controller = primaryBaritone().getPlayerContext().playerController();
@@ -566,7 +546,14 @@ public final class HiveTaskClient {
             return;
         }
         resetDirectBreak();
-        if (player.onGround()) startSupportBuilderCleanup();
+        if (player.onGround()) {
+            int deferred = task.cellSnapshot.size();
+            if (deferred > 0) {
+                sendEvent("Support descent completed; deferred " + deferred
+                    + " unreachable side scaffold block(s) and continued terrain mining.");
+            }
+            completeCurrentCell();
+        }
     }
 
     private void escapeOrRecover(String reason) {
@@ -1084,12 +1071,6 @@ public final class HiveTaskClient {
         json.addProperty("y", pos.getY());
         json.addProperty("z", pos.getZ());
         return json;
-    }
-
-    private static double horizontalDistance(BlockPos a, BlockPos b) {
-        double dx = a.getX() - b.getX();
-        double dz = a.getZ() - b.getZ();
-        return Math.sqrt(dx * dx + dz * dz);
     }
 
     private static String string(JsonObject object, String key, String fallback) {
