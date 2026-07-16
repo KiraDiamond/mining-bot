@@ -4,8 +4,6 @@ import baritone.api.BaritoneAPI;
 import baritone.api.IBaritone;
 import baritone.api.pathing.goals.GoalBlock;
 import baritone.api.pathing.goals.GoalXZ;
-import baritone.api.utils.RayTraceUtils;
-import baritone.api.utils.RotationUtils;
 import baritone.utils.ToolSet;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
@@ -32,7 +30,6 @@ import net.minecraft.world.level.block.TrapDoorBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.phys.BlockHitResult;
-import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 
@@ -707,8 +704,6 @@ public final class HiveTaskClient {
             else beginSupportCleanup();
             return;
         }
-        tryDirectMineReachable(now, player);
-
         boolean active = primaryBaritone().getBuilderProcess().isActive();
         if (active) lastNativeActiveMs = now;
         long idleFor = watchdog.idleFor(now);
@@ -728,79 +723,6 @@ public final class HiveTaskClient {
             escapeOrRecover("Bot is outside the current cell and made no progress for " + INACTIVE_TIMEOUT_MS / 1000L + " seconds.");
         } else if (idleFor >= STUCK_TIMEOUT_MS) {
             escapeOrRecover("No movement or mined-block progress for " + STUCK_TIMEOUT_MS / 1000L + " seconds.");
-        }
-    }
-
-    private void tryDirectMineReachable(long now, LocalPlayer player) {
-        if (task == null || MC.level == null || task.cellSnapshot.isEmpty()) return;
-        BlockPos target = task.directBreakTarget;
-        if (target != null) {
-            Block expected = task.cellSnapshot.get(target.asLong());
-            if (expected == null || MC.level.getBlockState(target).getBlock() != expected) {
-                resetDirectMining();
-                target = null;
-            }
-        }
-
-        if (target == null) {
-            if (now - task.lastDirectTargetSearchMs < 250L) return;
-            task.lastDirectTargetSearchMs = now;
-            double bestDistance = Double.POSITIVE_INFINITY;
-            for (Map.Entry<Long, Block> entry : task.cellSnapshot.entrySet()) {
-                BlockPos candidate = BlockPos.of(entry.getKey());
-                BlockState state = MC.level.getBlockState(candidate);
-                if (state.getBlock() != entry.getValue()) continue;
-                double distance = player.getEyePosition(1.0F).distanceToSqr(Vec3.atCenterOf(candidate));
-                if (distance >= bestDistance
-                        || RotationUtils.reachable(primaryBaritone().getPlayerContext(), candidate, 3.0D).isEmpty()) {
-                    continue;
-                }
-                target = candidate;
-                bestDistance = distance;
-            }
-            if (target == null) return;
-            task.directBreakTarget = target.immutable();
-        }
-
-        BlockState state = MC.level.getBlockState(target);
-        if (!selectSafeHotbarTool(state)) {
-            resetDirectMining();
-            return;
-        }
-        var rotation = RotationUtils.reachable(primaryBaritone().getPlayerContext(), target, 3.0D);
-        if (rotation.isEmpty()) {
-            resetDirectMining();
-            return;
-        }
-        var targetRotation = rotation.get();
-        primaryBaritone().getLookBehavior().updateTarget(targetRotation, true);
-        player.setYRot(targetRotation.getYaw());
-        player.setXRot(targetRotation.getPitch());
-
-        HitResult trace = RayTraceUtils.rayTraceTowards(player, targetRotation, 3.0D);
-        if (!(trace instanceof BlockHitResult blockHit) || !target.equals(blockHit.getBlockPos())) {
-            resetDirectMining();
-            return;
-        }
-        var controller = primaryBaritone().getPlayerContext().playerController();
-        if (!target.equals(task.startedDirectBreakTarget)) {
-            controller.resetBlockRemoving();
-            task.startedDirectBreakTarget = target.immutable();
-            controller.clickBlock(target, blockHit.getDirection());
-        } else {
-            controller.onPlayerDamageBlock(target, blockHit.getDirection());
-        }
-    }
-
-    private void resetDirectMining() {
-        if (task != null) {
-            MiningSafety.releaseBreakTarget(task.directBreakTarget);
-            task.directBreakTarget = null;
-            task.startedDirectBreakTarget = null;
-        }
-        try {
-            primaryBaritone().getPlayerContext().playerController().resetBlockRemoving();
-        } catch (RuntimeException ignored) {
         }
     }
 
@@ -1160,10 +1082,6 @@ public final class HiveTaskClient {
             task.minedBlocks += mined;
             task.cellPassMined += mined;
             task.skippedToolBlocks += skipped;
-            if (task.directBreakTarget != null
-                    && !snapshot.containsKey(task.directBreakTarget.asLong())) {
-                resetDirectMining();
-            }
             MiningSafety.replaceSnapshot(snapshot);
         }
     }
@@ -1355,8 +1273,6 @@ public final class HiveTaskClient {
         }
         if (task != null) {
             task.escapeBreakTarget = null;
-            task.directBreakTarget = null;
-            task.startedDirectBreakTarget = null;
         }
         MiningSafety.releaseBreakTarget(null);
     }
@@ -1383,8 +1299,13 @@ public final class HiveTaskClient {
         status.addProperty("taskId", task == null ? null : task.id);
         status.addProperty("blocker", blocker);
         status.addProperty("deniedBreaks", MiningSafety.deniedBreakCount());
+        status.addProperty("blockReachDistance", BaritoneAPI.getSettings().blockReachDistance.value);
+        status.addProperty("builderActive", primaryBaritone().getBuilderProcess().isActive());
+        status.addProperty("pathingActive", primaryBaritone().getPathingBehavior().isPathing());
         BlockPos denied = MiningSafety.lastDeniedBreak();
         if (denied != null) status.add("lastDeniedBreak", positionJson(denied));
+        BlockPos breakTarget = MiningSafety.lockedBreakTarget();
+        if (breakTarget != null) status.add("currentBreakTarget", positionJson(breakTarget));
 
         LocalPlayer player = MC.player;
         status.addProperty("username", player == null ? env("TASK_BOT_ID", "task-bot") : player.getGameProfile().name());
@@ -1514,9 +1435,6 @@ public final class HiveTaskClient {
         private BlockPos travelDestination;
         private BlockPos escapeDestination;
         private BlockPos escapeBreakTarget;
-        private BlockPos directBreakTarget;
-        private BlockPos startedDirectBreakTarget;
-        private long lastDirectTargetSearchMs;
         private int totalCells;
         private int completedCells;
         private int travelAttempts;
