@@ -62,10 +62,17 @@ public final class BlockBreakHelper {
             isLeftClick = true;
             var rotation = RotationUtils.reachable(ctx, locked, 3.0D);
             if (rotation.isEmpty()) {
-                return;
+                MiningSafety.releaseBreakTarget(locked);
+                locked = null;
+            } else {
+                var targetRotation = rotation.get();
+                BaritoneAPI.getProvider().getBaritoneForPlayer(ctx.player())
+                    .getLookBehavior().updateTarget(targetRotation, true);
+                // Apply immediately as well: Builder can otherwise replace the queued
+                // look target later in the same tick and abandon a half-broken block.
+                ctx.player().setYRot(targetRotation.getYaw());
+                ctx.player().setXRot(targetRotation.getPitch());
             }
-            BaritoneAPI.getProvider().getBaritoneForPlayer(ctx.player())
-                .getLookBehavior().updateTarget(rotation.get(), true);
         }
         HitResult trace = ctx.objectMouseOver();
         boolean isBlockTrace = trace != null && trace.getType() == HitResult.Type.BLOCK;
