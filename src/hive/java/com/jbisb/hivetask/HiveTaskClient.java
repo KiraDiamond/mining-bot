@@ -17,8 +17,12 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.inventory.ContainerInput;
+import net.minecraft.world.inventory.InventoryMenu;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.DoorBlock;
 import net.minecraft.world.level.block.FenceGateBlock;
 import net.minecraft.world.level.block.TrapDoorBlock;
@@ -66,6 +70,37 @@ public final class HiveTaskClient {
     private static final long SUPPORT_CLEANUP_IDLE_MS = envLong("TASK_SUPPORT_CLEANUP_IDLE_MS", 3000L);
     private static final long WORLD_JOIN_TIMEOUT_MS = envLong("TASK_WORLD_JOIN_TIMEOUT_MS", 90000L);
     private static final int MAX_CELL_ATTEMPTS = envInt("TASK_MAX_CELL_ATTEMPTS", 3, 1, 10);
+    private static final Set<Item> TERRAIN_ITEMS = Set.of(
+        Blocks.DIRT.asItem(),
+        Blocks.COARSE_DIRT.asItem(),
+        Blocks.ROOTED_DIRT.asItem(),
+        Blocks.GRASS_BLOCK.asItem(),
+        Blocks.PODZOL.asItem(),
+        Blocks.MYCELIUM.asItem(),
+        Blocks.MUD.asItem(),
+        Blocks.MOSS_BLOCK.asItem(),
+        Blocks.STONE.asItem(),
+        Blocks.COBBLESTONE.asItem(),
+        Blocks.DEEPSLATE.asItem(),
+        Blocks.COBBLED_DEEPSLATE.asItem(),
+        Blocks.GRANITE.asItem(),
+        Blocks.DIORITE.asItem(),
+        Blocks.ANDESITE.asItem(),
+        Blocks.TUFF.asItem(),
+        Blocks.CALCITE.asItem(),
+        Blocks.GRAVEL.asItem(),
+        Blocks.SAND.asItem(),
+        Blocks.RED_SAND.asItem(),
+        Blocks.CLAY.asItem(),
+        Blocks.SANDSTONE.asItem(),
+        Blocks.RED_SANDSTONE.asItem(),
+        Blocks.NETHERRACK.asItem(),
+        Blocks.SOUL_SAND.asItem(),
+        Blocks.SOUL_SOIL.asItem(),
+        Blocks.BLACKSTONE.asItem(),
+        Blocks.BASALT.asItem(),
+        Blocks.END_STONE.asItem()
+    );
 
     private final ConcurrentLinkedQueue<Runnable> clientWork = new ConcurrentLinkedQueue<>();
     private final ProgressWatchdog watchdog = new ProgressWatchdog();
@@ -129,9 +164,39 @@ public final class HiveTaskClient {
             clientWork.add(() -> startTask(incoming));
         } else if ("stop".equals(type)) {
             clientWork.add(() -> stopTask("Stopped by controller.", true));
+        } else if ("drop_terrain".equals(type)) {
+            clientWork.add(this::dropTerrainItems);
         } else if ("ping".equals(type)) {
             sendStatus();
         }
+    }
+
+    private void dropTerrainItems() {
+        LocalPlayer player = MC.player;
+        if (player == null || MC.gameMode == null) {
+            sendEvent("Cannot drop terrain items while disconnected.");
+            return;
+        }
+
+        boolean resumeTask = task != null;
+        cancelNative();
+        MiningSafety.disarmBreaking();
+
+        InventoryMenu menu = player.inventoryMenu;
+        int droppedStacks = 0;
+        int droppedItems = 0;
+        var controller = primaryBaritone().getPlayerContext().playerController();
+        for (int slot = InventoryMenu.INV_SLOT_START; slot < InventoryMenu.USE_ROW_SLOT_END; slot++) {
+            ItemStack stack = menu.getSlot(slot).getItem();
+            if (stack.isEmpty() || !TERRAIN_ITEMS.contains(stack.getItem())) continue;
+            droppedStacks++;
+            droppedItems += stack.getCount();
+            controller.windowClick(menu.containerId, slot, 1, ContainerInput.THROW, player);
+        }
+
+        sendEvent("Dropped " + droppedItems + " terrain item(s) from "
+            + droppedStacks + " stack(s).");
+        if (resumeTask) resumeCurrentTask();
     }
 
     private void startTask(JsonObject input) {
