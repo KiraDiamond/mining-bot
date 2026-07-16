@@ -17,10 +17,13 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.inventory.InventoryMenu;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.DoorBlock;
@@ -70,6 +73,10 @@ public final class HiveTaskClient {
     private static final long SUPPORT_CLEANUP_IDLE_MS = envLong("TASK_SUPPORT_CLEANUP_IDLE_MS", 3000L);
     private static final long WORLD_JOIN_TIMEOUT_MS = envLong("TASK_WORLD_JOIN_TIMEOUT_MS", 90000L);
     private static final int MAX_CELL_ATTEMPTS = envInt("TASK_MAX_CELL_ATTEMPTS", 3, 1, 10);
+    private static final int TOOL_PICKUP_RADIUS = envInt("TASK_TOOL_PICKUP_RADIUS", 6, 2, 16);
+    private static final long TOOL_SCAN_INTERVAL_MS = envLong("TASK_TOOL_SCAN_INTERVAL_MS", 500L);
+    private static final long TOOL_PICKUP_TIMEOUT_MS = envLong("TASK_TOOL_PICKUP_TIMEOUT_MS", 30000L);
+    private static final long TOOL_PICKUP_RETRY_DELAY_MS = envLong("TASK_TOOL_PICKUP_RETRY_DELAY_MS", 10000L);
     private static final Set<Item> TERRAIN_ITEMS = Set.of(
         Blocks.DIRT.asItem(),
         Blocks.COARSE_DIRT.asItem(),
@@ -114,6 +121,14 @@ public final class HiveTaskClient {
     private long lastNativeActiveMs;
     private long lastSettingsEnforceMs;
     private long lastAccessAttemptMs;
+    private long lastToolScanMs;
+    private long lastPickupGoalMs;
+    private long pickupStartedMs;
+    private long pickupMissingSinceMs;
+    private long pickupIgnoreUntilMs;
+    private UUID pickupEntityId;
+    private BlockPos lastPickupGoal;
+    private int pickupInitialPickaxeCount;
     private boolean worldTimeoutTriggered;
     private String blocker = "";
 
@@ -150,7 +165,12 @@ public final class HiveTaskClient {
             lastSettingsEnforceMs = now;
             enforceStageSettings();
         }
-        if (task != null) tickTask(now);
+        if (stage == Stage.PICKING_UP_TOOL) {
+            tickToolPickup(now);
+        } else {
+            maybeStartToolPickup(now);
+            if (stage != Stage.PICKING_UP_TOOL && task != null) tickTask(now);
+        }
         if (now - lastStatusMs >= STATUS_INTERVAL_MS) {
             lastStatusMs = now;
             sendStatus();
@@ -164,39 +184,187 @@ public final class HiveTaskClient {
             clientWork.add(() -> startTask(incoming));
         } else if ("stop".equals(type)) {
             clientWork.add(() -> stopTask("Stopped by controller.", true));
-        } else if ("drop_terrain".equals(type)) {
-            clientWork.add(this::dropTerrainItems);
         } else if ("ping".equals(type)) {
             sendStatus();
         }
     }
 
-    private void dropTerrainItems() {
+    private void maybeStartToolPickup(long now) {
         LocalPlayer player = MC.player;
-        if (player == null || MC.gameMode == null) {
-            sendEvent("Cannot drop terrain items while disconnected.");
+        if (player == null || MC.level == null || player.isDeadOrDying()
+                || now < pickupIgnoreUntilMs || now - lastToolScanMs < TOOL_SCAN_INTERVAL_MS
+                || stage == Stage.WAITING_WORLD || stage == Stage.WAITING_RESPAWN) {
+            return;
+        }
+        lastToolScanMs = now;
+
+        ItemEntity nearest = null;
+        double nearestDistance = TOOL_PICKUP_RADIUS * TOOL_PICKUP_RADIUS;
+        for (Entity entity : MC.level.entitiesForRendering()) {
+            if (!(entity instanceof ItemEntity itemEntity)
+                    || !itemEntity.isAlive()
+                    || itemEntity.getItem().getItem() != Items.DIAMOND_PICKAXE) {
+                continue;
+            }
+            double distance = itemEntity.distanceToSqr(player);
+            if (distance <= nearestDistance) {
+                nearest = itemEntity;
+                nearestDistance = distance;
+            }
+        }
+        if (nearest != null) beginToolPickup(nearest, now);
+    }
+
+    private void beginToolPickup(ItemEntity itemEntity, long now) {
+        LocalPlayer player = MC.player;
+        if (player == null || MC.level == null) return;
+
+        cancelNative();
+        MiningSafety.disarmBreaking();
+        configureTravelSettings();
+
+        if (player.getInventory().getFreeSlot() < 0) {
+            int dropped = dropOneTerrainStack(player);
+            if (dropped == 0) {
+                pickupIgnoreUntilMs = now + TOOL_PICKUP_RETRY_DELAY_MS;
+                sendEvent("Nearby diamond pickaxe found, but inventory is full and no terrain stack can be dropped.");
+                resumeAfterToolPickup();
+                return;
+            }
+            sendEvent("Dropped " + dropped + " terrain item(s) to make room for a nearby diamond pickaxe.");
+        }
+
+        pickupEntityId = itemEntity.getUUID();
+        pickupInitialPickaxeCount = countDiamondPickaxes(player);
+        pickupStartedMs = now;
+        pickupMissingSinceMs = 0L;
+        lastPickupGoalMs = 0L;
+        lastPickupGoal = null;
+        setStage(Stage.PICKING_UP_TOOL, "Collecting a nearby diamond pickaxe.");
+        sendEvent("Nearby diamond pickaxe detected; pausing safely to collect it.");
+        updateToolPickupGoal(itemEntity, now);
+    }
+
+    private int dropOneTerrainStack(LocalPlayer player) {
+        if (MC.gameMode == null) return 0;
+        InventoryMenu menu = player.inventoryMenu;
+        int selectedSlot = -1;
+        int selectedCount = 0;
+        for (int slot = InventoryMenu.INV_SLOT_START; slot < InventoryMenu.USE_ROW_SLOT_END; slot++) {
+            ItemStack stack = menu.getSlot(slot).getItem();
+            if (stack.isEmpty() || !TERRAIN_ITEMS.contains(stack.getItem())
+                    || stack.getCount() <= selectedCount) {
+                continue;
+            }
+            selectedSlot = slot;
+            selectedCount = stack.getCount();
+        }
+        if (selectedSlot < 0) return 0;
+        primaryBaritone().getPlayerContext().playerController().windowClick(
+            menu.containerId, selectedSlot, 1, ContainerInput.THROW, player
+        );
+        return selectedCount;
+    }
+
+    private void tickToolPickup(long now) {
+        LocalPlayer player = MC.player;
+        if (player == null || MC.level == null) {
+            cancelNative();
+            clearToolPickupState();
+            if (task != null) {
+                MiningSafety.disarmBreaking();
+                setStage(Stage.WAITING_WORLD, "Disconnected during diamond pickaxe pickup; task retained.");
+            } else {
+                setStage(Stage.IDLE, "");
+            }
+            return;
+        }
+        if (player.isDeadOrDying()) {
+            cancelNative();
+            clearToolPickupState();
+            if (task != null) {
+                MiningSafety.disarmBreaking();
+                setStage(Stage.WAITING_RESPAWN, "Died during diamond pickaxe pickup; task retained.");
+            } else {
+                setStage(Stage.IDLE, "");
+            }
+            return;
+        }
+        if (countDiamondPickaxes(player) > pickupInitialPickaxeCount) {
+            finishToolPickup(true, "Picked up the nearby diamond pickaxe.");
+            return;
+        }
+        if (now - pickupStartedMs >= TOOL_PICKUP_TIMEOUT_MS) {
+            pickupIgnoreUntilMs = now + TOOL_PICKUP_RETRY_DELAY_MS;
+            finishToolPickup(false, "Could not collect the nearby diamond pickaxe within "
+                + TOOL_PICKUP_TIMEOUT_MS / 1000L + " seconds.");
             return;
         }
 
-        boolean resumeTask = task != null;
-        cancelNative();
-        MiningSafety.disarmBreaking();
-
-        InventoryMenu menu = player.inventoryMenu;
-        int droppedStacks = 0;
-        int droppedItems = 0;
-        var controller = primaryBaritone().getPlayerContext().playerController();
-        for (int slot = InventoryMenu.INV_SLOT_START; slot < InventoryMenu.USE_ROW_SLOT_END; slot++) {
-            ItemStack stack = menu.getSlot(slot).getItem();
-            if (stack.isEmpty() || !TERRAIN_ITEMS.contains(stack.getItem())) continue;
-            droppedStacks++;
-            droppedItems += stack.getCount();
-            controller.windowClick(menu.containerId, slot, 1, ContainerInput.THROW, player);
+        Entity entity = pickupEntityId == null ? null : MC.level.getEntity(pickupEntityId);
+        if (!(entity instanceof ItemEntity itemEntity)
+                || !itemEntity.isAlive()
+                || itemEntity.getItem().getItem() != Items.DIAMOND_PICKAXE) {
+            if (pickupMissingSinceMs == 0L) pickupMissingSinceMs = now;
+            if (now - pickupMissingSinceMs >= 1500L) {
+                pickupIgnoreUntilMs = now + TOOL_PICKUP_RETRY_DELAY_MS;
+                finishToolPickup(false, "The nearby diamond pickaxe disappeared before this bot collected it.");
+            }
+            return;
         }
+        pickupMissingSinceMs = 0L;
+        updateToolPickupGoal(itemEntity, now);
+    }
 
-        sendEvent("Dropped " + droppedItems + " terrain item(s) from "
-            + droppedStacks + " stack(s).");
-        if (resumeTask) resumeCurrentTask();
+    private void updateToolPickupGoal(ItemEntity itemEntity, long now) {
+        BlockPos goal = itemEntity.blockPosition();
+        boolean goalChanged = !goal.equals(lastPickupGoal);
+        boolean pathInactive = !primaryBaritone().getCustomGoalProcess().isActive();
+        if (!goalChanged && !pathInactive && now - lastPickupGoalMs < TOOL_SCAN_INTERVAL_MS) return;
+
+        configureTravelSettings();
+        primaryBaritone().getCustomGoalProcess().setGoalAndPath(new GoalBlock(goal));
+        lastPickupGoal = goal.immutable();
+        lastPickupGoalMs = now;
+    }
+
+    private int countDiamondPickaxes(LocalPlayer player) {
+        int count = 0;
+        for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+            ItemStack stack = player.getInventory().getItem(slot);
+            if (!stack.isEmpty() && stack.getItem() == Items.DIAMOND_PICKAXE) {
+                count += stack.getCount();
+            }
+        }
+        return count;
+    }
+
+    private void finishToolPickup(boolean success, String message) {
+        cancelNative();
+        clearToolPickupState();
+        sendEvent(message);
+        if (task != null) {
+            sendEvent("Resuming the retained task after diamond pickaxe pickup.");
+            resumeCurrentTask();
+        } else {
+            blocker = success ? "" : message;
+            setStage(Stage.IDLE, blocker);
+        }
+    }
+
+    private void resumeAfterToolPickup() {
+        clearToolPickupState();
+        if (task != null) resumeCurrentTask();
+        else setStage(Stage.IDLE, "");
+    }
+
+    private void clearToolPickupState() {
+        pickupEntityId = null;
+        pickupInitialPickaxeCount = 0;
+        pickupStartedMs = 0L;
+        pickupMissingSinceMs = 0L;
+        lastPickupGoalMs = 0L;
+        lastPickupGoal = null;
     }
 
     private void startTask(JsonObject input) {
@@ -1100,6 +1268,7 @@ public final class HiveTaskClient {
     private void stopTask(String message, boolean report) {
         String id = task == null ? null : task.id;
         cancelNative();
+        clearToolPickupState();
         MiningSafety.endManagedTask();
         task = null;
         blocker = "";
@@ -1294,6 +1463,7 @@ public final class HiveTaskClient {
         TRAVELLING,
         MINING,
         ESCAPING,
+        PICKING_UP_TOOL,
         RECOVERING
     }
 
