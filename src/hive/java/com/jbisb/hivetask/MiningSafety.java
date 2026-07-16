@@ -59,9 +59,16 @@ public final class MiningSafety {
     static void armBreaking(Map<Long, Block> snapshot, Cuboid placementCell) {
         ALLOWED_BREAKS.set(Map.copyOf(snapshot));
         allowedPlacementCell = placementCell;
-        allowedPlacementColumn = placementCell == null || MC.player == null
-            ? null
-            : MC.player.blockPosition().immutable();
+        if (placementCell == null || MC.player == null) {
+            allowedPlacementColumn = null;
+        } else {
+            BlockPos player = MC.player.blockPosition();
+            allowedPlacementColumn = new BlockPos(
+                Math.max(placementCell.x1, Math.min(player.getX(), placementCell.x2)),
+                player.getY(),
+                Math.max(placementCell.z1, Math.min(player.getZ(), placementCell.z2))
+            );
+        }
         BREAK_TARGET.set(null);
     }
 

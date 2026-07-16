@@ -3,6 +3,7 @@ package com.jbisb.hivetask;
 import baritone.api.BaritoneAPI;
 import baritone.api.IBaritone;
 import baritone.api.pathing.goals.GoalBlock;
+import baritone.api.pathing.goals.GoalNear;
 import baritone.api.pathing.goals.GoalXZ;
 import baritone.utils.ToolSet;
 import com.google.gson.Gson;
@@ -534,7 +535,7 @@ public final class HiveTaskClient {
             }
             BlockPos center = task.currentCell.center();
             destination = new BlockPos(center.getX(), task.currentCell.y2 + 1, center.getZ());
-            MiningSafety.armBreaking(task.cellSnapshot);
+            MiningSafety.armBreaking(task.cellSnapshot, currentScaffoldColumn());
         } else {
             MiningSafety.disarmBreaking();
             configureTravelSettings();
@@ -546,7 +547,7 @@ public final class HiveTaskClient {
 
         IBaritone baritone = primaryBaritone();
         if (toMiningCell) {
-            baritone.getCustomGoalProcess().setGoalAndPath(new GoalBlock(destination));
+            baritone.getCustomGoalProcess().setGoalAndPath(new GoalNear(destination, 2));
             sendEvent("Travelling to cell " + task.currentCell
                 + " via " + destination
                 + " with breaking restricted to " + task.cellSnapshot.size() + " snapshotted cell block(s).");
@@ -1243,7 +1244,7 @@ public final class HiveTaskClient {
 
     private void configureMiningTravelSettings() {
         configureMiningSettings();
-        BaritoneAPI.getSettings().allowPlace.value = false;
+        BaritoneAPI.getSettings().allowPlace.value = true;
         BaritoneAPI.getSettings().allowParkourPlace.value = false;
     }
 
