@@ -31,6 +31,7 @@ import net.minecraft.world.level.block.FenceGateBlock;
 import net.minecraft.world.level.block.TrapDoorBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
@@ -548,11 +549,8 @@ public final class HiveTaskClient {
                 return;
             }
             BlockPos playerPos = MC.player.blockPosition();
-            destination = new BlockPos(
-                clamp(playerPos.getX(), task.currentCell.x1, task.currentCell.x2),
-                task.currentCell.y2 + 1,
-                clamp(playerPos.getZ(), task.currentCell.z1, task.currentCell.z2)
-            );
+            destination = cellAccessDestination(playerPos);
+            task.travelDestination = destination;
             MiningSafety.armBreaking(task.cellSnapshot, currentScaffoldColumn());
             if (nearestReachableSnapshotBlock(MC.player) != null) {
                 startMiningCell();
@@ -657,10 +655,16 @@ public final class HiveTaskClient {
     private boolean currentCellChunksLoaded() {
         if (MC.level == null || task == null || task.currentCell == null) return false;
         Cuboid cell = task.currentCell;
-        return MC.level.hasChunkAt(new BlockPos(cell.x1, cell.y1, cell.z1))
-            && MC.level.hasChunkAt(new BlockPos(cell.x2, cell.y1, cell.z1))
-            && MC.level.hasChunkAt(new BlockPos(cell.x1, cell.y1, cell.z2))
-            && MC.level.hasChunkAt(new BlockPos(cell.x2, cell.y1, cell.z2));
+        return isChunkLoaded(cell.x1, cell.z1)
+            && isChunkLoaded(cell.x2, cell.z1)
+            && isChunkLoaded(cell.x1, cell.z2)
+            && isChunkLoaded(cell.x2, cell.z2);
+    }
+
+    private boolean isChunkLoaded(int blockX, int blockZ) {
+        return MC.level.getChunkSource().getChunk(
+            blockX >> 4, blockZ >> 4, ChunkStatus.FULL, false
+        ) != null;
     }
 
     private void startMiningCell() {
@@ -882,10 +886,57 @@ public final class HiveTaskClient {
     }
 
     private Cuboid currentScaffoldColumn() {
+        BlockPos access = task.travelDestination;
+        int x = access == null
+            ? clamp(MC.player.blockPosition().getX(), task.currentCell.x1, task.currentCell.x2)
+            : access.getX();
+        int z = access == null
+            ? clamp(MC.player.blockPosition().getZ(), task.currentCell.z1, task.currentCell.z2)
+            : access.getZ();
         return new Cuboid(
-            task.currentCell.x1, task.cuboid.y1, task.currentCell.z1,
-            task.currentCell.x2, task.currentCell.y2, task.currentCell.z2
+            x, task.cuboid.y1, z,
+            x, Math.max(task.currentCell.y2, access == null ? task.currentCell.y2 : access.getY()), z
         );
+    }
+
+    private BlockPos cellAccessDestination(BlockPos playerPos) {
+        Cuboid cell = task.currentCell;
+        int accessY = Math.max(task.cuboid.y1, cell.y1 - 1);
+        List<BlockPos> candidates = new ArrayList<>();
+        for (int x = cell.x1; x <= cell.x2; x++) {
+            candidates.add(new BlockPos(x, accessY, cell.z1 - 1));
+            candidates.add(new BlockPos(x, accessY, cell.z2 + 1));
+        }
+        for (int z = cell.z1; z <= cell.z2; z++) {
+            candidates.add(new BlockPos(cell.x1 - 1, accessY, z));
+            candidates.add(new BlockPos(cell.x2 + 1, accessY, z));
+        }
+
+        BlockPos nearest = null;
+        double nearestDistance = Double.POSITIVE_INFINITY;
+        for (BlockPos candidate : candidates) {
+            if (!task.cuboid.contains(candidate) || !isOpenCellAccess(candidate)) continue;
+            double distance = candidate.distSqr(playerPos);
+            if (distance < nearestDistance) {
+                nearest = candidate;
+                nearestDistance = distance;
+            }
+        }
+        if (nearest != null) return nearest;
+
+        return new BlockPos(
+            clamp(playerPos.getX(), cell.x1, cell.x2),
+            cell.y2 + 1,
+            clamp(playerPos.getZ(), cell.z1, cell.z2)
+        );
+    }
+
+    private boolean isOpenCellAccess(BlockPos pos) {
+        if (MC.level == null) return false;
+        BlockState feet = MC.level.getBlockState(pos);
+        BlockState head = MC.level.getBlockState(pos.above());
+        return (feet.isAir() || feet.canBeReplaced())
+            && (head.isAir() || head.canBeReplaced());
     }
 
     private void beginSupportCleanup() {
