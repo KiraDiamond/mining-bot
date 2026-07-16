@@ -25,6 +25,7 @@ import baritone.pathing.precompute.PrecomputedData;
 import baritone.utils.BlockStateInterface;
 import baritone.utils.ToolSet;
 import baritone.utils.pathing.BetterWorldBorder;
+import com.jbisb.hivetask.MiningSafety;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
@@ -201,6 +202,9 @@ public class CalculationContext {
     }
 
     public double breakCostMultiplierAt(int x, int y, int z, BlockState current) {
+        if (!MiningSafety.canPlanBreak(x, y, z)) {
+            return COST_INF;
+        }
         if (!allowBreak && !allowBreakAnyway.contains(current.getBlock())) {
             return COST_INF;
         }

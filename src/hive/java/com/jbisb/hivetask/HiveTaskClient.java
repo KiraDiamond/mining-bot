@@ -46,9 +46,10 @@ public final class HiveTaskClient {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MAX_CLIENT_WORK_PER_TICK = 8;
     private static final int CELL_SIZE = envInt("TASK_CELL_SIZE", 12, 4, 32);
-    private static final int ARRIVAL_RADIUS = envInt("TASK_ARRIVAL_RADIUS", 10, 4, 24);
+    private static final int ARRIVAL_RADIUS = envInt("TASK_ARRIVAL_RADIUS", 24, 4, 32);
     private static final long STATUS_INTERVAL_MS = envLong("TASK_STATUS_INTERVAL_MS", 10000L);
     private static final long STUCK_TIMEOUT_MS = envLong("TASK_STUCK_TIMEOUT_MS", 120000L);
+    private static final long TAIL_STUCK_TIMEOUT_MS = envLong("TASK_TAIL_STUCK_TIMEOUT_MS", 30000L);
     private static final long INACTIVE_TIMEOUT_MS = envLong("TASK_INACTIVE_TIMEOUT_MS", 20000L);
     private static final int MAX_CELL_ATTEMPTS = envInt("TASK_MAX_CELL_ATTEMPTS", 3, 1, 10);
 
@@ -215,6 +216,7 @@ public final class HiveTaskClient {
 
         if (stage == Stage.TRAVELLING) tickTravel(now, player);
         if (stage == Stage.MINING) tickMining(now, player);
+        if (stage == Stage.ESCAPING) tickEscape(now, player);
     }
 
     private void resumeCurrentTask() {
@@ -245,6 +247,9 @@ public final class HiveTaskClient {
         if (task == null || MC.player == null) return;
         cancelNative();
         MiningSafety.disarmBreaking();
+        task.escapeSnapshot.clear();
+        task.escapeDestination = null;
+        task.escapeClearing = false;
         configureTravelSettings();
         task.travelDestination = destination;
         task.travelToCell = toMiningCell;
@@ -299,6 +304,7 @@ public final class HiveTaskClient {
     private void startMiningCell() {
         if (task == null || task.currentCell == null || MC.level == null || MC.player == null) return;
         cancelNative();
+        task.escapeSnapshot.clear();
         configureMiningSettings();
         Map<Long, Block> snapshot = snapshotCell(task.currentCell);
         task.cellSnapshot.clear();
@@ -362,18 +368,140 @@ public final class HiveTaskClient {
 
         boolean active = primaryBaritone().getBuilderProcess().isActive();
         if (active) lastNativeActiveMs = now;
+        long idleFor = watchdog.idleFor(now);
         if (!active && now - lastNativeActiveMs >= INACTIVE_TIMEOUT_MS) {
-            recover("Native Baritone became inactive with " + remaining + " snapshotted blocks remaining.");
+            escapeOrRecover("Native Baritone became inactive with " + remaining + " snapshotted blocks remaining.");
+        } else if (remaining <= 4 && idleFor >= TAIL_STUCK_TIMEOUT_MS) {
+            recover("Small unreachable tail made no progress for " + TAIL_STUCK_TIMEOUT_MS / 1000L + " seconds.");
+        } else if (!task.currentCell.contains(player.blockPosition()) && idleFor >= INACTIVE_TIMEOUT_MS) {
+            escapeOrRecover("Bot is outside the current cell and made no progress for " + INACTIVE_TIMEOUT_MS / 1000L + " seconds.");
+        } else if (idleFor >= STUCK_TIMEOUT_MS) {
+            escapeOrRecover("No movement or mined-block progress for " + STUCK_TIMEOUT_MS / 1000L + " seconds.");
+        }
+    }
+
+    private void escapeOrRecover(String reason) {
+        if (beginSafeEscape(reason)) return;
+        recover(reason);
+    }
+
+    private boolean beginSafeEscape(String reason) {
+        if (task == null || task.currentCell == null || MC.player == null || MC.level == null) return false;
+        BlockPos playerPos = MC.player.blockPosition();
+        String key = task.currentCell.toString();
+        if (!task.cuboid.contains(playerPos) || !task.escapeAttempted.add(key)) return false;
+
+        int targetX = clamp(playerPos.getX(), task.currentCell.x1, task.currentCell.x2);
+        int targetZ = clamp(playerPos.getZ(), task.currentCell.z1, task.currentCell.z2);
+        Cuboid corridor = new Cuboid(
+            Math.max(task.cuboid.x1, Math.min(playerPos.getX(), targetX) - 1),
+            Math.max(task.cuboid.y1, playerPos.getY() - 3),
+            Math.max(task.cuboid.z1, Math.min(playerPos.getZ(), targetZ) - 1),
+            Math.min(task.cuboid.x2, Math.max(playerPos.getX(), targetX) + 1),
+            Math.min(task.cuboid.y2, playerPos.getY() + 2),
+            Math.min(task.cuboid.z2, Math.max(playerPos.getZ(), targetZ) + 1)
+        );
+        Map<Long, Block> snapshot = snapshotCell(corridor);
+        // Builder intentionally preserves the block supporting the player. It is a safe
+        // step-off platform, not an obstruction that should keep recovery waiting forever.
+        snapshot.remove(playerPos.below().asLong());
+
+        cancelNative();
+        task.escapeSnapshot.clear();
+        task.escapeSnapshot.putAll(snapshot);
+        task.escapeDestination = new BlockPos(targetX, playerPos.getY(), targetZ);
+        blocker = reason;
+        if (snapshot.isEmpty()) {
+            beginEscapeTraversal("Escape corridor is already open");
+            return true;
+        }
+
+        task.escapeClearing = true;
+        configureMiningSettings();
+        MiningSafety.armBreaking(task.escapeSnapshot);
+        setStage(Stage.ESCAPING, reason);
+        watchdog.reset(stageSinceMs, MC.player.position(), snapshot.size());
+        lastNativeActiveMs = stageSinceMs;
+        primaryBaritone().getBuilderProcess().clearArea(
+            new BlockPos(corridor.x1, corridor.y1, corridor.z1),
+            new BlockPos(corridor.x2, corridor.y2, corridor.z2)
+        );
+        sendEvent("Opening coordinate-gated escape corridor " + corridor + " with " + snapshot.size() + " snapshotted blocks.");
+        return true;
+    }
+
+    private void tickEscape(long now, LocalPlayer player) {
+        if (!task.escapeClearing) {
+            tickEscapeTraversal(now, player);
+            return;
+        }
+        if (now - lastSnapshotCheckMs >= 500L) {
+            lastSnapshotCheckMs = now;
+            pruneSnapshot(task.escapeSnapshot);
+        }
+        int remaining = task.escapeSnapshot.size();
+        watchdog.observe(now, player.position(), remaining);
+        if (remaining == 0) {
+            beginEscapeTraversal("Escape corridor cleared");
+            return;
+        }
+        boolean active = primaryBaritone().getBuilderProcess().isActive();
+        if (active) lastNativeActiveMs = now;
+        if ((!active && now - lastNativeActiveMs >= INACTIVE_TIMEOUT_MS)
+                || watchdog.idleFor(now) >= STUCK_TIMEOUT_MS) {
+            task.escapeSnapshot.clear();
+            recover("Coordinate-gated escape could not free the bot; " + remaining + " blocks remained.");
+        }
+    }
+
+    private void beginEscapeTraversal(String reason) {
+        if (task == null || task.escapeDestination == null || MC.player == null) return;
+        cancelNative();
+        MiningSafety.disarmBreaking();
+        task.escapeSnapshot.clear();
+        task.escapeClearing = false;
+        configureTravelSettings();
+        setStage(Stage.ESCAPING, blocker);
+        watchdog.reset(stageSinceMs, MC.player.position(), 0);
+        lastNativeActiveMs = stageSinceMs;
+        BlockPos destination = task.escapeDestination;
+        primaryBaritone().getCustomGoalProcess().setGoalAndPath(new GoalXZ(destination.getX(), destination.getZ()));
+        sendEvent(reason + "; stepping non-destructively into cell at "
+            + destination.getX() + "," + destination.getZ() + ".");
+    }
+
+    private void tickEscapeTraversal(long now, LocalPlayer player) {
+        watchdog.observe(now, player.position(), 0);
+        BlockPos destination = task.escapeDestination;
+        if (destination == null) {
+            recover("Escape traversal lost its destination.");
+            return;
+        }
+        if (task.currentCell.contains(player.blockPosition())
+                || horizontalDistance(player.blockPosition(), destination) <= 1.0D) {
+            sendEvent("Stepped safely into the assigned cell; resuming its snapshot.");
+            startMiningCell();
+            return;
+        }
+        boolean active = primaryBaritone().getCustomGoalProcess().isActive();
+        if (active) lastNativeActiveMs = now;
+        if (!active && now - lastNativeActiveMs >= INACTIVE_TIMEOUT_MS) {
+            recover("Non-destructive escape traversal became inactive.");
         } else if (watchdog.idleFor(now) >= STUCK_TIMEOUT_MS) {
-            recover("No movement or mined-block progress for " + STUCK_TIMEOUT_MS / 1000L + " seconds.");
+            recover("Non-destructive escape traversal made no movement for "
+                + STUCK_TIMEOUT_MS / 1000L + " seconds.");
         }
     }
 
     private void pruneSnapshot() {
-        if (task == null || MC.level == null || task.cellSnapshot.isEmpty()) return;
+        pruneSnapshot(task == null ? null : task.cellSnapshot);
+    }
+
+    private void pruneSnapshot(Map<Long, Block> snapshot) {
+        if (task == null || MC.level == null || snapshot == null || snapshot.isEmpty()) return;
         int mined = 0;
         int skipped = 0;
-        var iterator = task.cellSnapshot.entrySet().iterator();
+        var iterator = snapshot.entrySet().iterator();
         while (iterator.hasNext()) {
             Map.Entry<Long, Block> entry = iterator.next();
             BlockPos pos = BlockPos.of(entry.getKey());
@@ -390,7 +518,7 @@ public final class HiveTaskClient {
             task.minedBlocks += mined;
             task.cellPassMined += mined;
             task.skippedToolBlocks += skipped;
-            MiningSafety.replaceSnapshot(task.cellSnapshot);
+            MiningSafety.replaceSnapshot(snapshot);
         }
     }
 
@@ -411,6 +539,7 @@ public final class HiveTaskClient {
         MiningSafety.disarmBreaking();
         task.completedCells++;
         task.failedAttempts.remove(task.currentCell.toString());
+        task.escapeAttempted.remove(task.currentCell.toString());
         sendEvent("Completed cell " + task.currentCell + " (" + task.completedCells + "/" + task.totalCells + ").");
         task.currentCell = null;
         beginNextCell();
@@ -420,6 +549,9 @@ public final class HiveTaskClient {
         if (task == null) return;
         cancelNative();
         MiningSafety.disarmBreaking();
+        task.escapeSnapshot.clear();
+        task.escapeDestination = null;
+        task.escapeClearing = false;
         blocker = reason;
 
         if (task.kind == TaskKind.GOTO) {
@@ -513,7 +645,7 @@ public final class HiveTaskClient {
     }
 
     private void enforceStageSettings() {
-        if (stage == Stage.MINING) configureMiningSettings();
+        if (stage == Stage.MINING || (stage == Stage.ESCAPING && task != null && task.escapeClearing)) configureMiningSettings();
         else configureTravelSettings();
     }
 
@@ -577,7 +709,7 @@ public final class HiveTaskClient {
             status.addProperty("totalCells", task.totalCells);
             status.addProperty("blockedCells", task.blockedCells.size());
             status.addProperty("skippedToolBlocks", task.skippedToolBlocks);
-            status.addProperty("cellRemaining", task.cellSnapshot.size());
+            status.addProperty("cellRemaining", stage == Stage.ESCAPING ? task.escapeSnapshot.size() : task.cellSnapshot.size());
             if (task.cuboid != null) status.add("cuboid", task.cuboid.toJson());
             if (task.currentCell != null) status.add("currentCell", task.currentCell.toJson());
         }
@@ -649,12 +781,17 @@ public final class HiveTaskClient {
         }
     }
 
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
     private enum Stage {
         IDLE,
         WAITING_WORLD,
         WAITING_RESPAWN,
         TRAVELLING,
         MINING,
+        ESCAPING,
         RECOVERING
     }
 
@@ -673,10 +810,14 @@ public final class HiveTaskClient {
         private final List<Cuboid> blockedCells = new ArrayList<>();
         private final Map<String, Integer> failedAttempts = new HashMap<>();
         private final Map<Long, Block> cellSnapshot = new HashMap<>();
+        private final Map<Long, Block> escapeSnapshot = new HashMap<>();
+        private final Set<String> escapeAttempted = new HashSet<>();
         private boolean cellsInitialized;
         private boolean travelToCell;
+        private boolean escapeClearing;
         private Cuboid currentCell;
         private BlockPos travelDestination;
+        private BlockPos escapeDestination;
         private int totalCells;
         private int completedCells;
         private int travelAttempts;
