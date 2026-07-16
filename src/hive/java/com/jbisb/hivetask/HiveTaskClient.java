@@ -54,6 +54,7 @@ public final class HiveTaskClient {
     private static final long STUCK_TIMEOUT_MS = envLong("TASK_STUCK_TIMEOUT_MS", 120000L);
     private static final long TAIL_STUCK_TIMEOUT_MS = envLong("TASK_TAIL_STUCK_TIMEOUT_MS", 30000L);
     private static final long INACTIVE_TIMEOUT_MS = envLong("TASK_INACTIVE_TIMEOUT_MS", 20000L);
+    private static final long WORLD_JOIN_TIMEOUT_MS = envLong("TASK_WORLD_JOIN_TIMEOUT_MS", 90000L);
     private static final int MAX_CELL_ATTEMPTS = envInt("TASK_MAX_CELL_ATTEMPTS", 3, 1, 10);
 
     private final ConcurrentLinkedQueue<Runnable> clientWork = new ConcurrentLinkedQueue<>();
@@ -67,6 +68,7 @@ public final class HiveTaskClient {
     private long lastRespawnAttemptMs;
     private long lastNativeActiveMs;
     private long lastSettingsEnforceMs;
+    private boolean worldTimeoutTriggered;
     private String blocker = "";
 
     private static final HiveTaskClient INSTANCE = new HiveTaskClient();
@@ -187,8 +189,24 @@ public final class HiveTaskClient {
                 setStage(Stage.WAITING_WORLD, "Disconnected; task retained for reconnect.");
                 sendEvent("Disconnected with task retained; mining is disarmed.");
             }
+            if (!worldTimeoutTriggered && now - stageSinceMs >= WORLD_JOIN_TIMEOUT_MS) {
+                worldTimeoutTriggered = true;
+                sendEvent("World join timed out after " + WORLD_JOIN_TIMEOUT_MS / 1000L
+                    + " seconds; exiting for managed relaunch.");
+                Thread exitThread = new Thread(() -> {
+                    try {
+                        Thread.sleep(500L);
+                    } catch (InterruptedException ignored) {
+                        Thread.currentThread().interrupt();
+                    }
+                    System.exit(86);
+                }, "HiveMinerJoinTimeout");
+                exitThread.setDaemon(true);
+                exitThread.start();
+            }
             return;
         }
+        worldTimeoutTriggered = false;
 
         if (player.isDeadOrDying()) {
             if (stage != Stage.WAITING_RESPAWN) {
