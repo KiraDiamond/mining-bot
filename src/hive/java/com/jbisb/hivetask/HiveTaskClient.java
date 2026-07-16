@@ -554,8 +554,7 @@ public final class HiveTaskClient {
                 clamp(playerPos.getZ(), task.currentCell.z1, task.currentCell.z2)
             );
             MiningSafety.armBreaking(task.cellSnapshot, currentScaffoldColumn());
-            if (task.currentCell.containsHorizontal(MC.player.blockPosition())
-                    && MiningSafety.hasReachableBreak()) {
+            if (MiningSafety.hasReachableBreak()) {
                 startMiningCell();
                 return;
             }
@@ -586,7 +585,6 @@ public final class HiveTaskClient {
         watchdog.observe(now, player.position(), 0);
         if (task.travelToCell) {
             if (task.currentCell != null
-                    && task.currentCell.containsHorizontal(player.blockPosition())
                     && MiningSafety.hasReachableBreak()
                     && currentCellChunksLoaded()) {
                 startMiningCell();
