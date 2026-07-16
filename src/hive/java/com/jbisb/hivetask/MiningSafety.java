@@ -34,7 +34,7 @@ public final class MiningSafety {
     private static final Set<Block> PROTECTED_BLOCKS = buildProtectedBlocks();
 
     private static volatile boolean managedTask;
-    private static volatile double breakReach = 5.5D;
+    private static volatile double breakReach = 3.0D;
     private static volatile Cuboid allowedPlacementCell;
     private static volatile BlockPos allowedPlacementColumn;
     private static volatile BlockPos lastDeniedBreak;

@@ -66,7 +66,7 @@ public final class HiveTaskClient {
     private static final int MAX_CLIENT_WORK_PER_TICK = 8;
     private static final int CELL_SIZE = envInt("TASK_CELL_SIZE", 12, 4, 32);
     private static final int LAYER_HEIGHT = envInt("TASK_LAYER_HEIGHT", 5, 2, 8);
-    private static final float BLOCK_REACH = (float) envDouble("TASK_BLOCK_REACH", 5.5D, 3.0D, 6.0D);
+    private static final float BLOCK_REACH = (float) envDouble("TASK_BLOCK_REACH", 3.0D, 3.0D, 6.0D);
     private static final long STATUS_INTERVAL_MS = envLong("TASK_STATUS_INTERVAL_MS", 10000L);
     private static final long STUCK_TIMEOUT_MS = envLong("TASK_STUCK_TIMEOUT_MS", 120000L);
     private static final long TAIL_STUCK_TIMEOUT_MS = envLong("TASK_TAIL_STUCK_TIMEOUT_MS", 30000L);
@@ -554,7 +554,7 @@ public final class HiveTaskClient {
                 clamp(playerPos.getZ(), task.currentCell.z1, task.currentCell.z2)
             );
             MiningSafety.armBreaking(task.cellSnapshot, currentScaffoldColumn());
-            if (MiningSafety.hasReachableBreak()) {
+            if (nearestReachableSnapshotBlock(MC.player) != null) {
                 startMiningCell();
                 return;
             }
@@ -585,7 +585,7 @@ public final class HiveTaskClient {
         watchdog.observe(now, player.position(), 0);
         if (task.travelToCell) {
             if (task.currentCell != null
-                    && MiningSafety.hasReachableBreak()
+                    && nearestReachableSnapshotBlock(player) != null
                     && currentCellChunksLoaded()) {
                 startMiningCell();
                 return;
@@ -758,8 +758,12 @@ public final class HiveTaskClient {
             }
             return;
         }
-        if (idleFor >= DIRECT_BREAK_FALLBACK_MS && nearestReachableSnapshotBlock(player) != null) {
+        BlockPos reachableTarget = nearestReachableSnapshotBlock(player);
+        if (idleFor >= DIRECT_BREAK_FALLBACK_MS && reachableTarget != null) {
             beginDirectBreakFallback();
+        } else if (reachableTarget == null && idleFor >= INACTIVE_TIMEOUT_MS) {
+            sendEvent("No snapshotted block is visible within reach; moving to a usable face of the current cell.");
+            beginTravel(task.currentCell.center(), true);
         } else if (!active && now - lastNativeActiveMs >= INACTIVE_TIMEOUT_MS) {
             escapeOrRecover("Native Baritone became inactive with " + remaining + " snapshotted blocks remaining.");
         } else if (!task.currentCell.containsHorizontal(player.blockPosition()) && idleFor >= INACTIVE_TIMEOUT_MS) {
