@@ -139,6 +139,7 @@ class TaskManager {
     this.pendingResumeChecks = new Set();
     this.taskReconnectTimers = new Map();
     this.taskReconnectAttempts = new Map();
+    this.nativeLaunchPromises = new Map();
     this.ready = false;
     this.control = new TaskControlServer({
       host: process.env.TASK_CONTROL_HOST || '127.0.0.1',
@@ -955,6 +956,16 @@ class TaskManager {
   }
 
   async ensureNativeTaskClient(name = 'kira', { forceRestart = false } = {}) {
+    const botName = safeName(name) || 'kira';
+    const pending = this.nativeLaunchPromises.get(botName);
+    if (pending) return pending;
+    const launch = this.#ensureNativeTaskClient(botName, { forceRestart })
+      .finally(() => this.nativeLaunchPromises.delete(botName));
+    this.nativeLaunchPromises.set(botName, launch);
+    return launch;
+  }
+
+  async #ensureNativeTaskClient(name, { forceRestart = false } = {}) {
     const config = await this.#nativeLaunchConfig(name);
     await this.#ensureNativePrismRoot(config);
     await this.#ensureNativeInstance(config);
@@ -993,6 +1004,8 @@ rm -f ${shellSingleQuote(nativeCommandFile(config.botName))}
         PRISM_DIR: config.prismDir,
         PROFILE: config.profile,
         TASK_BOT_ID: config.botName,
+        TASK_CELL_SIZE: '4',
+        TASK_LAYER_HEIGHT: '3',
         TASK_LAUNCH_LOG: config.launcherLogPath,
         TASK_NATIVE_COMMAND_FILE: nativeCommandFile(config.botName)
       }
@@ -1180,7 +1193,9 @@ rm -f ${shellSingleQuote(nativeCommandFile(config.botName))}
 
   #handleBotDisconnect({ botId, username }) {
     console.log(`[task:${botId}] ${username} disconnected from controller.`);
-    if (this.activeTasks.get(botId)?.payload) this.#scheduleManagedReconnect(botId);
+    if (this.activeTasks.get(botId)?.payload && !this.nativeLaunchPromises.has(botId)) {
+      this.#scheduleManagedReconnect(botId);
+    }
   }
 
   #scheduleManagedReconnect(botId) {
