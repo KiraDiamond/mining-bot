@@ -50,4 +50,11 @@ public class CuboidTest {
                 <= cells.get(index).horizontalDistanceSquared(origin));
         }
     }
+
+    @Test
+    public void distanceSquaredUsesTheNearestPointInThreeDimensions() {
+        Cuboid cell = new Cuboid(10, 20, 30, 13, 22, 33);
+        assertEquals(0.0D, cell.distanceSquared(new BlockPos(11, 21, 31)), 0.0D);
+        assertEquals(14.0D, cell.distanceSquared(new BlockPos(8, 17, 29)), 0.0D);
+    }
 }

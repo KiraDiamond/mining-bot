@@ -96,6 +96,16 @@ final class Cuboid {
         return dx * dx + dz * dz;
     }
 
+    double distanceSquared(BlockPos pos) {
+        int nearestX = Math.max(x1, Math.min(pos.getX(), x2));
+        int nearestY = Math.max(y1, Math.min(pos.getY(), y2));
+        int nearestZ = Math.max(z1, Math.min(pos.getZ(), z2));
+        double dx = nearestX - pos.getX();
+        double dy = nearestY - pos.getY();
+        double dz = nearestZ - pos.getZ();
+        return dx * dx + dy * dy + dz * dz;
+    }
+
     JsonObject toJson() {
         JsonObject json = new JsonObject();
         json.addProperty("x1", x1);

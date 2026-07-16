@@ -498,12 +498,22 @@ public final class HiveTaskClient {
     }
 
     private void beginNextCell() {
-        if (task == null || task.kind != TaskKind.MINE_CUBOID) return;
-        Cuboid next = task.cells.pollFirst();
+        if (task == null || task.kind != TaskKind.MINE_CUBOID || MC.player == null) return;
+        BlockPos playerPos = MC.player.blockPosition();
+        Cuboid next = null;
+        double nearestDistance = Double.POSITIVE_INFINITY;
+        for (Cuboid candidate : task.cells) {
+            double distance = candidate.distanceSquared(playerPos);
+            if (distance < nearestDistance) {
+                next = candidate;
+                nearestDistance = distance;
+            }
+        }
         if (next == null) {
             finishMiningTask();
             return;
         }
+        task.cells.remove(next);
         task.currentCell = next;
         task.travelAttempts = 0;
         task.cleaningSupports = false;
