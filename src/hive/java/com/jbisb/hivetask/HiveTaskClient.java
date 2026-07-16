@@ -2,9 +2,7 @@ package com.jbisb.hivetask;
 
 import baritone.api.BaritoneAPI;
 import baritone.api.IBaritone;
-import baritone.api.pathing.goals.Goal;
 import baritone.api.pathing.goals.GoalBlock;
-import baritone.api.pathing.goals.GoalComposite;
 import baritone.api.pathing.goals.GoalXZ;
 import baritone.api.utils.RayTraceUtils;
 import baritone.api.utils.RotationUtils;
@@ -569,7 +567,7 @@ public final class HiveTaskClient {
 
         IBaritone baritone = primaryBaritone();
         if (toMiningCell) {
-            baritone.getCustomGoalProcess().setGoalAndPath(miningTravelGoal(destination));
+            baritone.getCustomGoalProcess().setGoalAndPath(new GoalBlock(destination));
             sendEvent("Travelling to cell " + task.currentCell
                 + " via " + destination
                 + " with breaking restricted to " + task.cellSnapshot.size() + " snapshotted cell block(s).");
@@ -591,7 +589,7 @@ public final class HiveTaskClient {
                 return;
             }
             if (task.currentCell != null
-                    && reachedMiningTravelGoal(player.blockPosition(), destination)
+                    && player.blockPosition().equals(destination)
                     && currentCellChunksLoaded()) {
                 startMiningCell();
                 return;
@@ -604,7 +602,11 @@ public final class HiveTaskClient {
         boolean active = primaryBaritone().getCustomGoalProcess().isActive();
         if (active) lastNativeActiveMs = now;
         long idleFor = watchdog.idleFor(now);
-        if (idleFor >= INACTIVE_TIMEOUT_MS
+        if (task.travelToCell
+            && task.cellSnapshot.size() <= 4
+            && idleFor >= TAIL_STUCK_TIMEOUT_MS) {
+            recoverTravel("Could not reach the exact access square for a small mining tail.");
+        } else if (idleFor >= INACTIVE_TIMEOUT_MS
             && now - lastAccessAttemptMs >= 5000L
             && tryOpenNearbyAccess(player)) {
             lastAccessAttemptMs = now;
@@ -986,31 +988,6 @@ public final class HiveTaskClient {
         if (MC.level == null) return false;
         BlockState below = MC.level.getBlockState(pos.below());
         return !below.isAir() && !below.canBeReplaced() && below.getFluidState().isEmpty();
-    }
-
-    private Goal miningTravelGoal(BlockPos destination) {
-        List<Goal> goals = new ArrayList<>();
-        addMiningTravelGoal(goals, destination);
-        addMiningTravelGoal(goals, destination.north());
-        addMiningTravelGoal(goals, destination.south());
-        addMiningTravelGoal(goals, destination.west());
-        addMiningTravelGoal(goals, destination.east());
-        if (goals.isEmpty()) return new GoalBlock(destination);
-        if (goals.size() == 1) return goals.getFirst();
-        return new GoalComposite(goals.toArray(Goal[]::new));
-    }
-
-    private void addMiningTravelGoal(List<Goal> goals, BlockPos candidate) {
-        if (task == null || task.cuboid == null || !task.cuboid.contains(candidate)) return;
-        if (!isOpenCellAccess(candidate) || !hasStableFooting(candidate)) return;
-        goals.add(new GoalBlock(candidate));
-    }
-
-    private boolean reachedMiningTravelGoal(BlockPos playerPos, BlockPos destination) {
-        if (playerPos.getY() != destination.getY()) return false;
-        int dx = Math.abs(playerPos.getX() - destination.getX());
-        int dz = Math.abs(playerPos.getZ() - destination.getZ());
-        return dx + dz <= 1;
     }
 
     private void beginSupportCleanup() {
