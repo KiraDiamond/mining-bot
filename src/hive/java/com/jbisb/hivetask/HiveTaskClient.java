@@ -64,6 +64,7 @@ public final class HiveTaskClient {
     private static final int MAX_CLIENT_WORK_PER_TICK = 8;
     private static final int CELL_SIZE = envInt("TASK_CELL_SIZE", 12, 4, 32);
     private static final int LAYER_HEIGHT = envInt("TASK_LAYER_HEIGHT", 5, 2, 8);
+    private static final float BLOCK_REACH = (float) envDouble("TASK_BLOCK_REACH", 5.5D, 3.0D, 6.0D);
     private static final long STATUS_INTERVAL_MS = envLong("TASK_STATUS_INTERVAL_MS", 10000L);
     private static final long STUCK_TIMEOUT_MS = envLong("TASK_STUCK_TIMEOUT_MS", 120000L);
     private static final long TAIL_STUCK_TIMEOUT_MS = envLong("TASK_TAIL_STUCK_TIMEOUT_MS", 30000L);
@@ -546,6 +547,10 @@ public final class HiveTaskClient {
             BlockPos center = task.currentCell.center();
             destination = new BlockPos(center.getX(), task.currentCell.y2 + 1, center.getZ());
             MiningSafety.armBreaking(task.cellSnapshot, currentScaffoldColumn());
+            if (MiningSafety.hasReachableBreak()) {
+                startMiningCell();
+                return;
+            }
         } else {
             MiningSafety.disarmBreaking();
             configureTravelSettings();
@@ -572,6 +577,10 @@ public final class HiveTaskClient {
         if (destination == null) return;
         watchdog.observe(now, player.position(), 0);
         if (task.travelToCell) {
+            if (MiningSafety.hasReachableBreak() && currentCellChunksLoaded()) {
+                startMiningCell();
+                return;
+            }
             if (task.currentCell != null
                     && player.blockPosition().distSqr(destination) <= 4.0D
                     && currentCellChunksLoaded()) {
@@ -1231,7 +1240,8 @@ public final class HiveTaskClient {
     }
 
     private void configureTravelSettings() {
-        BaritoneAPI.getSettings().blockReachDistance.value = 3.0F;
+        MiningSafety.setBreakReach(BLOCK_REACH);
+        BaritoneAPI.getSettings().blockReachDistance.value = BLOCK_REACH;
         BaritoneAPI.getSettings().allowBreak.value = false;
         BaritoneAPI.getSettings().allowPlace.value = false;
         BaritoneAPI.getSettings().allowParkour.value = false;
@@ -1242,7 +1252,8 @@ public final class HiveTaskClient {
     }
 
     private void configureMiningSettings() {
-        BaritoneAPI.getSettings().blockReachDistance.value = 3.0F;
+        MiningSafety.setBreakReach(BLOCK_REACH);
+        BaritoneAPI.getSettings().blockReachDistance.value = BLOCK_REACH;
         BaritoneAPI.getSettings().allowBreak.value = true;
         BaritoneAPI.getSettings().allowPlace.value = true;
         BaritoneAPI.getSettings().allowParkour.value = false;
@@ -1398,6 +1409,14 @@ public final class HiveTaskClient {
     private static long envLong(String key, long fallback) {
         try {
             return Long.parseLong(env(key, Long.toString(fallback)));
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private static double envDouble(String key, double fallback, double min, double max) {
+        try {
+            return Math.max(min, Math.min(max, Double.parseDouble(env(key, Double.toString(fallback)))));
         } catch (NumberFormatException ignored) {
             return fallback;
         }

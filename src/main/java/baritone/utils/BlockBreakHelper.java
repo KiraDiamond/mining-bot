@@ -60,7 +60,7 @@ public final class BlockBreakHelper {
         BlockPos locked = MiningSafety.lockedBreakTarget();
         if (locked != null) {
             isLeftClick = true;
-            var rotation = RotationUtils.reachable(ctx, locked, 3.0D);
+            var rotation = RotationUtils.reachable(ctx, locked, MiningSafety.breakReach());
             if (rotation.isEmpty()) {
                 MiningSafety.releaseBreakTarget(locked);
                 locked = null;

@@ -34,6 +34,7 @@ public final class MiningSafety {
     private static final Set<Block> PROTECTED_BLOCKS = buildProtectedBlocks();
 
     private static volatile boolean managedTask;
+    private static volatile double breakReach = 5.5D;
     private static volatile Cuboid allowedPlacementCell;
     private static volatile BlockPos allowedPlacementColumn;
     private static volatile BlockPos lastDeniedBreak;
@@ -44,6 +45,14 @@ public final class MiningSafety {
         managedTask = true;
         PLACED_SUPPORTS.clear();
         disarmBreaking();
+    }
+
+    public static void setBreakReach(double reach) {
+        breakReach = Math.max(1.0D, reach);
+    }
+
+    public static double breakReach() {
+        return breakReach;
     }
 
     static void endManagedTask() {
@@ -88,6 +97,13 @@ public final class MiningSafety {
 
     static int allowedCount() {
         return ALLOWED_BREAKS.get().size();
+    }
+
+    static boolean hasReachableBreak() {
+        for (long key : ALLOWED_BREAKS.get().keySet()) {
+            if (isAllowedAndReachable(BlockPos.of(key))) return true;
+        }
+        return false;
     }
 
     static void replaceSnapshot(Map<Long, Block> snapshot) {
@@ -178,7 +194,7 @@ public final class MiningSafety {
         double nearestX = Math.max(pos.getX(), Math.min(eyes.x, pos.getX() + 1.0D));
         double nearestY = Math.max(pos.getY(), Math.min(eyes.y, pos.getY() + 1.0D));
         double nearestZ = Math.max(pos.getZ(), Math.min(eyes.z, pos.getZ() + 1.0D));
-        return eyes.distanceToSqr(nearestX, nearestY, nearestZ) <= 9.0D;
+        return eyes.distanceToSqr(nearestX, nearestY, nearestZ) <= breakReach * breakReach;
     }
 
     public static boolean canUseItem(ItemStack held, BlockHitResult hit) {
