@@ -589,7 +589,7 @@ public final class HiveTaskClient {
                 return;
             }
             if (task.currentCell != null
-                    && player.blockPosition().distSqr(destination) <= 4.0D
+                    && player.blockPosition().equals(destination)
                     && currentCellChunksLoaded()) {
                 startMiningCell();
                 return;
