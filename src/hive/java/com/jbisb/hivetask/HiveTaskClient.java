@@ -254,6 +254,7 @@ public final class HiveTaskClient {
         task.escapeSnapshot.clear();
         task.escapeDestination = null;
         task.escapeClearing = false;
+        task.escapeDescending = false;
         configureTravelSettings();
         task.travelDestination = destination;
         task.travelToCell = toMiningCell;
@@ -421,6 +422,7 @@ public final class HiveTaskClient {
         }
 
         task.escapeClearing = true;
+        task.escapeDescending = false;
         configureMiningSettings();
         MiningSafety.armBreaking(task.escapeSnapshot);
         setStage(Stage.ESCAPING, reason);
@@ -435,6 +437,10 @@ public final class HiveTaskClient {
     }
 
     private void tickEscape(long now, LocalPlayer player) {
+        if (task.escapeDescending) {
+            tickEscapeDescent(now, player);
+            return;
+        }
         if (!task.escapeClearing) {
             tickEscapeTraversal(now, player);
             return;
@@ -464,6 +470,7 @@ public final class HiveTaskClient {
         MiningSafety.disarmBreaking();
         task.escapeSnapshot.clear();
         task.escapeClearing = false;
+        task.escapeDescending = false;
         configureTravelSettings();
         setStage(Stage.ESCAPING, blocker);
         watchdog.reset(stageSinceMs, MC.player.position(), 0);
@@ -488,11 +495,69 @@ public final class HiveTaskClient {
         }
         boolean active = primaryBaritone().getCustomGoalProcess().isActive();
         if (active) lastNativeActiveMs = now;
+        long idleFor = watchdog.idleFor(now);
+        if (idleFor >= INACTIVE_TIMEOUT_MS && beginEscapeDescent()) {
+            return;
+        }
         if (!active && now - lastNativeActiveMs >= INACTIVE_TIMEOUT_MS) {
             recover("Non-destructive escape traversal became inactive.");
-        } else if (watchdog.idleFor(now) >= STUCK_TIMEOUT_MS) {
+        } else if (idleFor >= STUCK_TIMEOUT_MS) {
             recover("Non-destructive escape traversal made no movement for "
                 + STUCK_TIMEOUT_MS / 1000L + " seconds.");
+        }
+    }
+
+    private boolean beginEscapeDescent() {
+        if (task == null || task.currentCell == null || MC.player == null || MC.level == null) return false;
+        BlockPos playerPos = MC.player.blockPosition();
+        String key = task.currentCell.toString();
+        if (!task.cuboid.contains(playerPos)
+                || playerPos.getY() <= task.cuboid.y1
+                || !task.escapeDescentAttempted.add(key)) {
+            return false;
+        }
+
+        Cuboid column = new Cuboid(
+            playerPos.getX(), task.cuboid.y1, playerPos.getZ(),
+            playerPos.getX(), playerPos.getY() - 1, playerPos.getZ()
+        );
+        Map<Long, Block> snapshot = snapshotCell(column);
+        if (snapshot.isEmpty()) return false;
+
+        cancelNative();
+        task.escapeSnapshot.clear();
+        task.escapeSnapshot.putAll(snapshot);
+        task.escapeClearing = false;
+        task.escapeDescending = true;
+        configureMiningSettings();
+        MiningSafety.armBreaking(task.escapeSnapshot);
+        setStage(Stage.ESCAPING, blocker);
+        watchdog.reset(stageSinceMs, MC.player.position(), snapshot.size());
+        lastNativeActiveMs = stageSinceMs;
+        primaryBaritone().getCustomGoalProcess().setGoalAndPath(
+            new GoalBlock(playerPos.getX(), task.cuboid.y1, playerPos.getZ())
+        );
+        sendEvent("Horizontal escape is blocked; descending through " + snapshot.size()
+            + " exact snapshotted support block(s) without placement.");
+        return true;
+    }
+
+    private void tickEscapeDescent(long now, LocalPlayer player) {
+        if (now - lastSnapshotCheckMs >= 500L) {
+            lastSnapshotCheckMs = now;
+            pruneSnapshot(task.escapeSnapshot);
+        }
+        int remaining = task.escapeSnapshot.size();
+        watchdog.observe(now, player.position(), remaining);
+        if (remaining == 0 || player.blockPosition().getY() <= task.cuboid.y1) {
+            beginEscapeTraversal("Support descent completed");
+            return;
+        }
+        boolean active = primaryBaritone().getCustomGoalProcess().isActive();
+        if (active) lastNativeActiveMs = now;
+        if ((!active && now - lastNativeActiveMs >= INACTIVE_TIMEOUT_MS)
+                || watchdog.idleFor(now) >= STUCK_TIMEOUT_MS) {
+            recover("Coordinate-gated support descent could not progress; " + remaining + " blocks remained.");
         }
     }
 
@@ -543,6 +608,7 @@ public final class HiveTaskClient {
         task.completedCells++;
         task.failedAttempts.remove(task.currentCell.toString());
         task.escapeAttempted.remove(task.currentCell.toString());
+        task.escapeDescentAttempted.remove(task.currentCell.toString());
         sendEvent("Completed cell " + task.currentCell + " (" + task.completedCells + "/" + task.totalCells + ").");
         task.currentCell = null;
         beginNextCell();
@@ -555,6 +621,7 @@ public final class HiveTaskClient {
         task.escapeSnapshot.clear();
         task.escapeDestination = null;
         task.escapeClearing = false;
+        task.escapeDescending = false;
         blocker = reason;
 
         if (task.kind == TaskKind.GOTO) {
@@ -648,7 +715,10 @@ public final class HiveTaskClient {
     }
 
     private void enforceStageSettings() {
-        if (stage == Stage.MINING || (stage == Stage.ESCAPING && task != null && task.escapeClearing)) configureMiningSettings();
+        if (stage == Stage.MINING
+                || (stage == Stage.ESCAPING && task != null && (task.escapeClearing || task.escapeDescending))) {
+            configureMiningSettings();
+        }
         else configureTravelSettings();
     }
 
@@ -815,9 +885,11 @@ public final class HiveTaskClient {
         private final Map<Long, Block> cellSnapshot = new HashMap<>();
         private final Map<Long, Block> escapeSnapshot = new HashMap<>();
         private final Set<String> escapeAttempted = new HashSet<>();
+        private final Set<String> escapeDescentAttempted = new HashSet<>();
         private boolean cellsInitialized;
         private boolean travelToCell;
         private boolean escapeClearing;
+        private boolean escapeDescending;
         private Cuboid currentCell;
         private BlockPos travelDestination;
         private BlockPos escapeDestination;

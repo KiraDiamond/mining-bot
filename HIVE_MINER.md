@@ -11,7 +11,7 @@ This branch is based on IzumiiKonata Baritone commit `e24f5781` and adds a safet
 - Chests, barrels, machines, torches, ladders, beds, shulker boxes, signs, hanging signs, and discovered block entities are excluded from snapshots.
 - Two clients split work on the longest horizontal axis and subdivide their slices into non-overlapping 12x12 cells.
 - Adjacent cells within 24 blocks hand off directly to the coordinate-gated Builder, avoiding false travel failures when a bot is already inside the mining volume.
-- A bot physically trapped inside its assigned cuboid may clear one small, snapshotted corridor toward the current cell, preserve its support block, then step into the cell non-destructively. General pathing receives the same coordinate allowlist, and placement remains disabled.
+- A bot physically trapped inside its assigned cuboid may clear one small, snapshotted corridor toward the current cell, preserve its support block, then step into the cell non-destructively. If the open side is an unsafe drop, native downward movement may clear only the exact snapshotted support column down to the task floor. General pathing receives the same coordinate allowlist, and placement remains disabled.
 - No movement and no block progress for 120 seconds requeues the cell. Three failed passes mark only that cell blocked and continue the job.
 - In-game death disarms breaking, respawns, and resumes through non-destructive travel.
 - A crashed client is relaunched with bounded 15/30/60-second backoff and receives only its persisted slice.
