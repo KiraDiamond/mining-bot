@@ -13,6 +13,7 @@ import net.minecraft.world.level.block.FenceGateBlock;
 import net.minecraft.world.level.block.TrapDoorBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -27,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class MiningSafety {
     private static final Minecraft MC = Minecraft.getInstance();
     private static final AtomicReference<Map<Long, Block>> ALLOWED_BREAKS = new AtomicReference<>(Map.of());
+    private static final AtomicReference<BlockPos> BREAK_TARGET = new AtomicReference<>();
     private static final Map<Long, Block> PLACED_SUPPORTS = new ConcurrentHashMap<>();
     private static final AtomicLong DENIED_BREAKS = new AtomicLong();
     private static final Set<Block> PROTECTED_BLOCKS = buildProtectedBlocks();
@@ -56,16 +58,19 @@ public final class MiningSafety {
     static void armBreaking(Map<Long, Block> snapshot, Cuboid placementCell) {
         ALLOWED_BREAKS.set(Map.copyOf(snapshot));
         allowedPlacementCell = placementCell;
+        BREAK_TARGET.set(null);
     }
 
     static void armSupportCleanup(Map<Long, Block> supports) {
         ALLOWED_BREAKS.set(Map.copyOf(supports));
         allowedPlacementCell = null;
+        BREAK_TARGET.set(null);
     }
 
     static void disarmBreaking() {
         ALLOWED_BREAKS.set(Map.of());
         allowedPlacementCell = null;
+        BREAK_TARGET.set(null);
     }
 
     static int allowedCount() {
@@ -74,6 +79,8 @@ public final class MiningSafety {
 
     static void replaceSnapshot(Map<Long, Block> snapshot) {
         ALLOWED_BREAKS.set(Map.copyOf(snapshot));
+        BlockPos target = BREAK_TARGET.get();
+        if (target != null && !snapshot.containsKey(target.asLong())) BREAK_TARGET.compareAndSet(target, null);
     }
 
     static boolean isProtected(Block block) {
@@ -103,9 +110,15 @@ public final class MiningSafety {
 
     public static boolean canBreak(BlockPos pos) {
         if (!managedTask) return true;
-        long key = pos.asLong();
-        Block expected = ALLOWED_BREAKS.get().get(key);
-        boolean allowed = expected != null && MC.level != null && MC.level.getBlockState(pos).getBlock() == expected;
+        boolean allowed = isAllowedAndReachable(pos);
+        if (allowed) {
+            BlockPos target = lockedBreakTarget();
+            if (target == null) {
+                BREAK_TARGET.compareAndSet(null, pos.immutable());
+                target = BREAK_TARGET.get();
+            }
+            allowed = pos.equals(target);
+        }
         if (!allowed) {
             DENIED_BREAKS.incrementAndGet();
             lastDeniedBreak = pos.immutable();
@@ -121,7 +134,35 @@ public final class MiningSafety {
 
     public static boolean canPlanPlace(int x, int y, int z) {
         Cuboid cell = allowedPlacementCell;
-        return !managedTask || (cell != null && cell.contains(x, y, z));
+        if (!managedTask) return true;
+        if (cell == null || !cell.contains(x, y, z) || MC.player == null) return false;
+        BlockPos feet = MC.player.blockPosition();
+        return x == feet.getX() && z == feet.getZ() && y <= feet.getY();
+    }
+
+    public static BlockPos lockedBreakTarget() {
+        BlockPos target = BREAK_TARGET.get();
+        if (target != null && !isAllowedAndReachable(target)) {
+            BREAK_TARGET.compareAndSet(target, null);
+            return null;
+        }
+        return target;
+    }
+
+    public static void releaseBreakTarget(BlockPos pos) {
+        BlockPos target = BREAK_TARGET.get();
+        if (target != null && (pos == null || target.equals(pos))) BREAK_TARGET.compareAndSet(target, null);
+    }
+
+    private static boolean isAllowedAndReachable(BlockPos pos) {
+        if (MC.level == null || MC.player == null) return false;
+        Block expected = ALLOWED_BREAKS.get().get(pos.asLong());
+        if (expected == null || MC.level.getBlockState(pos).getBlock() != expected) return false;
+        Vec3 eyes = MC.player.getEyePosition(1.0F);
+        double nearestX = Math.max(pos.getX(), Math.min(eyes.x, pos.getX() + 1.0D));
+        double nearestY = Math.max(pos.getY(), Math.min(eyes.y, pos.getY() + 1.0D));
+        double nearestZ = Math.max(pos.getZ(), Math.min(eyes.z, pos.getZ() + 1.0D));
+        return eyes.distanceToSqr(nearestX, nearestY, nearestZ) <= 9.0D;
     }
 
     public static boolean canUseItem(ItemStack held, BlockHitResult hit) {

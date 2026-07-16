@@ -19,7 +19,10 @@ package baritone.utils;
 
 import baritone.api.BaritoneAPI;
 import baritone.api.utils.IPlayerContext;
+import baritone.api.utils.RotationUtils;
 import baritone.utils.accessor.IPlayerControllerMP;
+import com.jbisb.hivetask.MiningSafety;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -54,20 +57,36 @@ public final class BlockBreakHelper {
             breakDelayTimer--;
             return;
         }
+        BlockPos locked = MiningSafety.lockedBreakTarget();
+        if (locked != null) {
+            isLeftClick = true;
+            var rotation = RotationUtils.reachable(ctx, locked, 3.0D);
+            if (rotation.isEmpty()) {
+                return;
+            }
+            BaritoneAPI.getProvider().getBaritoneForPlayer(ctx.player())
+                .getLookBehavior().updateTarget(rotation.get(), true);
+        }
         HitResult trace = ctx.objectMouseOver();
         boolean isBlockTrace = trace != null && trace.getType() == HitResult.Type.BLOCK;
+        if (locked != null && (!isBlockTrace || !locked.equals(((BlockHitResult) trace).getBlockPos()))) {
+            ctx.playerController().setHittingBlock(false);
+            return;
+        }
 
         if (isLeftClick && isBlockTrace) {
+            BlockPos target = ((BlockHitResult) trace).getBlockPos();
             ctx.playerController().setHittingBlock(wasHitting);
             if (ctx.playerController().hasBrokenBlock()) {
                 ctx.playerController().syncHeldItem();
-                ctx.playerController().clickBlock(((BlockHitResult) trace).getBlockPos(), ((BlockHitResult) trace).getDirection());
+                ctx.playerController().clickBlock(target, ((BlockHitResult) trace).getDirection());
                 ctx.player().swing(InteractionHand.MAIN_HAND);
             } else {
-                if (ctx.playerController().onPlayerDamageBlock(((BlockHitResult) trace).getBlockPos(), ((BlockHitResult) trace).getDirection())) {
+                if (ctx.playerController().onPlayerDamageBlock(target, ((BlockHitResult) trace).getDirection())) {
                     ctx.player().swing(InteractionHand.MAIN_HAND);
                 }
                 if (ctx.playerController().hasBrokenBlock()) { // block broken this tick
+                    MiningSafety.releaseBreakTarget(target);
                     // break delay timer only applies for multi-tick block breaks like vanilla
                     breakDelayTimer = BaritoneAPI.getSettings().blockBreakSpeed.value - BASE_BREAK_DELAY;
                     // must reset controller's destroy delay to prevent the client from delaying itself unnecessarily
