@@ -4,6 +4,7 @@ import baritone.api.BaritoneAPI;
 import baritone.api.IBaritone;
 import baritone.api.pathing.goals.GoalBlock;
 import baritone.api.pathing.goals.GoalXZ;
+import baritone.utils.ToolSet;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -12,6 +13,7 @@ import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
@@ -534,10 +536,8 @@ public final class HiveTaskClient {
         setStage(Stage.ESCAPING, blocker);
         watchdog.reset(stageSinceMs, MC.player.position(), snapshot.size());
         lastNativeActiveMs = stageSinceMs;
-        primaryBaritone().getCustomGoalProcess().setGoalAndPath(
-            new GoalBlock(playerPos.getX(), task.cuboid.y1, playerPos.getZ())
-        );
-        sendEvent("Horizontal escape is blocked; descending through " + snapshot.size()
+        task.escapeBreakTarget = null;
+        sendEvent("Horizontal escape is blocked; directly clearing " + snapshot.size()
             + " exact snapshotted support block(s) without placement.");
         return true;
     }
@@ -550,14 +550,53 @@ public final class HiveTaskClient {
         int remaining = task.escapeSnapshot.size();
         watchdog.observe(now, player.position(), remaining);
         if (remaining == 0 || player.blockPosition().getY() <= task.cuboid.y1) {
+            resetDirectBreak();
             beginEscapeTraversal("Support descent completed");
             return;
         }
-        boolean active = primaryBaritone().getCustomGoalProcess().isActive();
-        if (active) lastNativeActiveMs = now;
-        if ((!active && now - lastNativeActiveMs >= INACTIVE_TIMEOUT_MS)
-                || watchdog.idleFor(now) >= STUCK_TIMEOUT_MS) {
+        BlockPos support = player.blockPosition().below();
+        Block expected = task.escapeSnapshot.get(support.asLong());
+        if (expected != null && MC.level.getBlockState(support).getBlock() == expected) {
+            BlockState state = MC.level.getBlockState(support);
+            if (!selectSafeHotbarTool(state)) {
+                resetDirectBreak();
+                recover("No safe hotbar tool can clear the snapshotted support block.");
+                return;
+            }
+            var controller = primaryBaritone().getPlayerContext().playerController();
+            if (!support.equals(task.escapeBreakTarget)) {
+                controller.resetBlockRemoving();
+                task.escapeBreakTarget = support.immutable();
+                controller.clickBlock(support, Direction.UP);
+            } else {
+                controller.onPlayerDamageBlock(support, Direction.UP);
+            }
+        }
+        if (watchdog.idleFor(now) >= STUCK_TIMEOUT_MS) {
+            resetDirectBreak();
             recover("Coordinate-gated support descent could not progress; " + remaining + " blocks remained.");
+        }
+    }
+
+    private boolean selectSafeHotbarTool(BlockState state) {
+        if (MC.player == null) return false;
+        int slot = new ToolSet(MC.player).getBestSlot(state.getBlock(), false);
+        ItemStack stack = MC.player.getInventory().getItem(slot);
+        if (state.requiresCorrectToolForDrops() && !stack.isCorrectToolForDrops(state)) return false;
+        if (stack.isDamageableItem()
+                && stack.getMaxDamage() - stack.getDamageValue() <= task.minDurability) {
+            return false;
+        }
+        MC.player.getInventory().setSelectedSlot(slot);
+        primaryBaritone().getPlayerContext().playerController().syncHeldItem();
+        return true;
+    }
+
+    private void resetDirectBreak() {
+        if (task != null) task.escapeBreakTarget = null;
+        try {
+            primaryBaritone().getPlayerContext().playerController().resetBlockRemoving();
+        } catch (RuntimeException ignored) {
         }
     }
 
@@ -730,12 +769,14 @@ public final class HiveTaskClient {
     private void cancelNative() {
         try {
             IBaritone baritone = primaryBaritone();
+            baritone.getPlayerContext().playerController().resetBlockRemoving();
             baritone.getMineProcess().cancel();
             baritone.getBuilderProcess().onLostControl();
             baritone.getCustomGoalProcess().setGoal(null);
             baritone.getPathingBehavior().forceCancel();
         } catch (RuntimeException ignored) {
         }
+        if (task != null) task.escapeBreakTarget = null;
     }
 
     private IBaritone primaryBaritone() {
@@ -893,6 +934,7 @@ public final class HiveTaskClient {
         private Cuboid currentCell;
         private BlockPos travelDestination;
         private BlockPos escapeDestination;
+        private BlockPos escapeBreakTarget;
         private int totalCells;
         private int completedCells;
         private int travelAttempts;
