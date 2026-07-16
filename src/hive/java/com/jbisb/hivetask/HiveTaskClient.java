@@ -344,6 +344,9 @@ public final class HiveTaskClient {
 
     private void finishToolPickup(boolean success, String message) {
         cancelNative();
+        if (success && MC.player != null && putBestDiamondPickaxeOnHotbar(MC.player)) {
+            message += " Moved a safe diamond pickaxe to the hotbar.";
+        }
         clearToolPickupState();
         sendEvent(message);
         if (task != null) {
@@ -353,6 +356,38 @@ public final class HiveTaskClient {
             blocker = success ? "" : message;
             setStage(Stage.IDLE, blocker);
         }
+    }
+
+    private boolean putBestDiamondPickaxeOnHotbar(LocalPlayer player) {
+        int bestSlot = -1;
+        int bestDurability = -1;
+        int minimumDurability = task == null ? 10 : task.minDurability;
+        for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+            ItemStack stack = player.getInventory().getItem(slot);
+            if (stack.isEmpty() || stack.getItem() != Items.DIAMOND_PICKAXE) continue;
+            int durability = stack.getMaxDamage() - stack.getDamageValue();
+            if (durability > minimumDurability && durability > bestDurability) {
+                bestSlot = slot;
+                bestDurability = durability;
+            }
+        }
+        if (bestSlot < 0) return false;
+
+        int hotbarSlot = bestSlot < 9 ? bestSlot : 0;
+        if (bestSlot >= 9) {
+            for (int slot = 0; slot < 9; slot++) {
+                if (player.getInventory().getItem(slot).isEmpty()) {
+                    hotbarSlot = slot;
+                    break;
+                }
+            }
+            primaryBaritone().getPlayerContext().playerController().windowClick(
+                player.inventoryMenu.containerId, bestSlot, hotbarSlot, ContainerInput.SWAP, player
+            );
+        }
+        player.getInventory().setSelectedSlot(hotbarSlot);
+        primaryBaritone().getPlayerContext().playerController().syncHeldItem();
+        return true;
     }
 
     private void resumeAfterToolPickup() {
@@ -1494,6 +1529,9 @@ public final class HiveTaskClient {
     private void configureMiningSettings() {
         MiningSafety.setBreakReach(BLOCK_REACH);
         BaritoneAPI.getSettings().blockReachDistance.value = BLOCK_REACH;
+        BaritoneAPI.getSettings().autoTool.value = true;
+        BaritoneAPI.getSettings().assumeExternalAutoTool.value = false;
+        BaritoneAPI.getSettings().allowInventory.value = true;
         BaritoneAPI.getSettings().allowBreak.value = true;
         BaritoneAPI.getSettings().allowPlace.value = true;
         BaritoneAPI.getSettings().allowParkour.value = false;
