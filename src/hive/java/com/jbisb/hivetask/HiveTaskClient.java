@@ -787,7 +787,7 @@ public final class HiveTaskClient {
         Stage previous = stage;
         stage = next;
         stageSinceMs = System.currentTimeMillis();
-        if (reason != null && !reason.isBlank()) blocker = reason;
+        if (reason != null) blocker = reason;
         if (previous != next) {
             LOGGER.info("[HiveMiner] Stage {} -> {}{}", previous, next,
                 blocker.isBlank() ? "" : ": " + blocker);
