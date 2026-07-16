@@ -27,16 +27,16 @@ public class CuboidTest {
     }
 
     @Test
-    public void layersWithinEachColumnAreTopDown() {
+    public void layersWithinEachColumnAreBottomUp() {
         List<Cuboid> cells = new Cuboid(0, 60, 0, 7, 72, 7)
             .cells(8, 5, new BlockPos(0, 60, 0));
         assertEquals(3, cells.size());
-        assertEquals(68, cells.get(0).y1);
-        assertEquals(72, cells.get(0).y2);
-        assertEquals(63, cells.get(1).y1);
-        assertEquals(67, cells.get(1).y2);
-        assertEquals(60, cells.get(2).y1);
-        assertEquals(62, cells.get(2).y2);
+        assertEquals(60, cells.get(0).y1);
+        assertEquals(64, cells.get(0).y2);
+        assertEquals(65, cells.get(1).y1);
+        assertEquals(69, cells.get(1).y2);
+        assertEquals(70, cells.get(2).y1);
+        assertEquals(72, cells.get(2).y2);
     }
 
     @Test
