@@ -214,9 +214,13 @@ public final class HiveTaskClient {
             return;
         }
 
-        if (stage == Stage.TRAVELLING) tickTravel(now, player);
-        if (stage == Stage.MINING) tickMining(now, player);
-        if (stage == Stage.ESCAPING) tickEscape(now, player);
+        if (stage == Stage.TRAVELLING) {
+            tickTravel(now, player);
+        } else if (stage == Stage.MINING) {
+            tickMining(now, player);
+        } else if (stage == Stage.ESCAPING) {
+            tickEscape(now, player);
+        }
     }
 
     private void resumeCurrentTask() {
@@ -477,8 +481,7 @@ public final class HiveTaskClient {
             recover("Escape traversal lost its destination.");
             return;
         }
-        if (task.currentCell.contains(player.blockPosition())
-                || horizontalDistance(player.blockPosition(), destination) <= 1.0D) {
+        if (task.currentCell.contains(player.blockPosition())) {
             sendEvent("Stepped safely into the assigned cell; resuming its snapshot.");
             startMiningCell();
             return;
