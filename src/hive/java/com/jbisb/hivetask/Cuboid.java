@@ -81,8 +81,8 @@ final class Cuboid {
 
         List<Cuboid> cells = new ArrayList<>();
         for (Cuboid column : columns) {
-            for (int bottomY = y1; bottomY <= y2; bottomY += verticalSize) {
-                int topY = Math.min(y2, bottomY + verticalSize - 1);
+            for (int topY = y2; topY >= y1; topY -= verticalSize) {
+                int bottomY = Math.max(y1, topY - verticalSize + 1);
                 cells.add(new Cuboid(column.x1, bottomY, column.z1, column.x2, topY, column.z2));
             }
         }
