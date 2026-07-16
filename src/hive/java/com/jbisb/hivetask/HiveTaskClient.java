@@ -547,7 +547,8 @@ public final class HiveTaskClient {
             BlockPos center = task.currentCell.center();
             destination = new BlockPos(center.getX(), task.currentCell.y2 + 1, center.getZ());
             MiningSafety.armBreaking(task.cellSnapshot, currentScaffoldColumn());
-            if (MiningSafety.hasReachableBreak()) {
+            if (task.currentCell.containsHorizontal(MC.player.blockPosition())
+                    && MiningSafety.hasReachableBreak()) {
                 startMiningCell();
                 return;
             }
@@ -577,7 +578,10 @@ public final class HiveTaskClient {
         if (destination == null) return;
         watchdog.observe(now, player.position(), 0);
         if (task.travelToCell) {
-            if (MiningSafety.hasReachableBreak() && currentCellChunksLoaded()) {
+            if (task.currentCell != null
+                    && task.currentCell.containsHorizontal(player.blockPosition())
+                    && MiningSafety.hasReachableBreak()
+                    && currentCellChunksLoaded()) {
                 startMiningCell();
                 return;
             }
@@ -1246,6 +1250,7 @@ public final class HiveTaskClient {
         BaritoneAPI.getSettings().allowPlace.value = false;
         BaritoneAPI.getSettings().allowParkour.value = false;
         BaritoneAPI.getSettings().allowParkourPlace.value = false;
+        BaritoneAPI.getSettings().walkWhileBreaking.value = false;
         BaritoneAPI.getSettings().itemSaver.value = true;
         BaritoneAPI.getSettings().itemSaverThreshold.value = task == null ? 10 : task.minDurability;
         applyProtectedBlocks(new HashSet<>(MiningSafety.protectedBlocks()));
@@ -1258,6 +1263,7 @@ public final class HiveTaskClient {
         BaritoneAPI.getSettings().allowPlace.value = true;
         BaritoneAPI.getSettings().allowParkour.value = false;
         BaritoneAPI.getSettings().allowParkourPlace.value = false;
+        BaritoneAPI.getSettings().walkWhileBreaking.value = false;
         BaritoneAPI.getSettings().itemSaver.value = true;
         BaritoneAPI.getSettings().itemSaverThreshold.value = task == null ? 10 : task.minDurability;
         applyProtectedBlocks(new HashSet<>(MiningSafety.protectedBlocks()));
