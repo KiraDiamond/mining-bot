@@ -518,22 +518,33 @@ public final class HiveTaskClient {
     private void beginTravel(BlockPos destination, boolean toMiningCell) {
         if (task == null || MC.player == null) return;
         cancelNative();
-        MiningSafety.disarmBreaking();
         task.escapeSnapshot.clear();
         task.escapeDestination = null;
         task.escapeClearing = false;
         task.escapeDescending = false;
-        configureTravelSettings();
         task.travelDestination = destination;
         task.travelToCell = toMiningCell;
         blocker = "";
+
+        if (toMiningCell && task.currentCell != null) {
+            configureMiningTravelSettings();
+            Map<Long, Block> snapshot = snapshotCell(task.currentCell, true);
+            task.cellSnapshot.clear();
+            task.cellSnapshot.putAll(snapshot);
+            MiningSafety.armBreaking(task.cellSnapshot);
+        } else {
+            MiningSafety.disarmBreaking();
+            configureTravelSettings();
+        }
+
         setStage(Stage.TRAVELLING, "");
         watchdog.reset(stageSinceMs, MC.player.position(), 0);
 
         IBaritone baritone = primaryBaritone();
         if (toMiningCell) {
             baritone.getCustomGoalProcess().setGoalAndPath(new GoalXZ(destination.getX(), destination.getZ()));
-            sendEvent("Travelling non-destructively to cell " + task.currentCell + ".");
+            sendEvent("Travelling to cell " + task.currentCell
+                + " with breaking restricted to " + task.cellSnapshot.size() + " snapshotted cell block(s).");
         } else {
             baritone.getCustomGoalProcess().setGoalAndPath(new GoalBlock(destination));
             sendEvent("Travelling non-destructively to " + destination + ".");
@@ -1304,6 +1315,12 @@ public final class HiveTaskClient {
         applyProtectedBlocks(new HashSet<>(MiningSafety.protectedBlocks()));
     }
 
+    private void configureMiningTravelSettings() {
+        configureMiningSettings();
+        BaritoneAPI.getSettings().allowPlace.value = false;
+        BaritoneAPI.getSettings().allowParkourPlace.value = false;
+    }
+
     private void configureBreakOnlySettings() {
         configureMiningSettings();
         BaritoneAPI.getSettings().allowPlace.value = false;
@@ -1313,6 +1330,8 @@ public final class HiveTaskClient {
         if (stage == Stage.MINING) {
             if (task != null && task.cleaningSupports) configureBreakOnlySettings();
             else configureMiningSettings();
+        } else if (stage == Stage.TRAVELLING && task != null && task.travelToCell) {
+            configureMiningTravelSettings();
         } else if (stage == Stage.ESCAPING && task != null && (task.escapeClearing || task.escapeDescending)) {
             configureBreakOnlySettings();
         }
