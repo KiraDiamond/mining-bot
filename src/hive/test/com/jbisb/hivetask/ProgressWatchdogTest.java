@@ -35,6 +35,19 @@ public class ProgressWatchdogTest {
     }
 
     @Test
+    public void miningWorkIgnoresMovementUntilBlockCountDrops() {
+        ProgressWatchdog watchdog = new ProgressWatchdog();
+        watchdog.reset(1000L, new Vec3(-214, 89, 372), 1);
+        watchdog.observeWork(5000L, 1);
+        watchdog.observeWork(9000L, 1);
+        watchdog.observeWork(13000L, 1);
+        assertEquals(12000L, watchdog.idleFor(13000L));
+
+        watchdog.observeWork(15000L, 0);
+        assertEquals(0L, watchdog.idleFor(15000L));
+    }
+
+    @Test
     public void travelOnlyCountsNewBestDistanceTowardDestination() {
         ProgressWatchdog watchdog = new ProgressWatchdog();
         Vec3 destination = new Vec3(10, 62, 0);

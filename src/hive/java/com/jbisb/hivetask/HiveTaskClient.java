@@ -772,7 +772,7 @@ public final class HiveTaskClient {
             return;
         }
         int remaining = task.cellSnapshot.size();
-        watchdog.observe(now, player.position(), remaining);
+        watchdog.observeWork(now, remaining);
         if (remaining == 0) {
             if (task.cleaningSupports) completeCurrentCell();
             else beginSupportCleanup();
@@ -1071,7 +1071,7 @@ public final class HiveTaskClient {
 
     private void tickSupportDescent(long now, LocalPlayer player) {
         int remaining = task.cellSnapshot.size();
-        watchdog.observe(now, player.position(), remaining);
+        watchdog.observeWork(now, remaining);
         BlockPos support = player.blockPosition().below();
         Block expected = task.cellSnapshot.get(support.asLong());
         if (expected != null && MC.level.getBlockState(support).getBlock() == expected) {
@@ -1171,7 +1171,7 @@ public final class HiveTaskClient {
             pruneSnapshot(task.escapeSnapshot);
         }
         int remaining = task.escapeSnapshot.size();
-        watchdog.observe(now, player.position(), remaining);
+        watchdog.observeWork(now, remaining);
         if (remaining == 0) {
             beginEscapeTraversal("Escape corridor cleared");
             return;
@@ -1276,7 +1276,7 @@ public final class HiveTaskClient {
             pruneSnapshot(task.escapeSnapshot);
         }
         int remaining = task.escapeSnapshot.size();
-        watchdog.observe(now, player.position(), remaining);
+        watchdog.observeWork(now, remaining);
         if (remaining == 0 || player.blockPosition().getY() <= task.cuboid.y1) {
             resetDirectBreak();
             beginEscapeTraversal("Support descent completed");
@@ -1501,6 +1501,7 @@ public final class HiveTaskClient {
     private void configureTravelSettings() {
         MiningSafety.setBreakReach(BLOCK_REACH);
         BaritoneAPI.getSettings().blockReachDistance.value = BLOCK_REACH;
+        BaritoneAPI.getSettings().allowVines.value = false;
         BaritoneAPI.getSettings().allowBreak.value = false;
         BaritoneAPI.getSettings().allowPlace.value = false;
         BaritoneAPI.getSettings().allowParkour.value = false;
@@ -1514,6 +1515,7 @@ public final class HiveTaskClient {
     private void configureMiningSettings() {
         MiningSafety.setBreakReach(BLOCK_REACH);
         BaritoneAPI.getSettings().blockReachDistance.value = BLOCK_REACH;
+        BaritoneAPI.getSettings().allowVines.value = false;
         BaritoneAPI.getSettings().autoTool.value = true;
         BaritoneAPI.getSettings().assumeExternalAutoTool.value = false;
         BaritoneAPI.getSettings().allowInventory.value = true;

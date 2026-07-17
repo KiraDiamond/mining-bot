@@ -29,6 +29,12 @@ final class ProgressWatchdog {
         lastRemaining = remaining;
     }
 
+    void observeWork(long now, int remaining) {
+        boolean completedWork = lastRemaining >= 0 && remaining < lastRemaining;
+        if (completedWork) lastProgressMs = now;
+        lastRemaining = remaining;
+    }
+
     void observeToward(long now, Vec3 position, int remaining, Vec3 destination) {
         boolean targetChanged = target == null || !target.equals(destination);
         double distance = position.distanceTo(destination);
