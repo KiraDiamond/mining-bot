@@ -540,22 +540,7 @@ public final class HiveTaskClient {
     private void beginNextCell() {
         if (task == null || task.kind != TaskKind.MINE_CUBOID || MC.player == null) return;
         BlockPos playerPos = MC.player.blockPosition();
-        Cuboid next = null;
-        int fewestFailures = Integer.MAX_VALUE;
-        int lowestLayer = Integer.MAX_VALUE;
-        double nearestDistance = Double.POSITIVE_INFINITY;
-        for (Cuboid candidate : task.cells) {
-            int failures = task.failedAttempts.getOrDefault(candidate.toString(), 0);
-            double distance = candidate.distanceSquared(playerPos);
-            if (failures < fewestFailures
-                    || (failures == fewestFailures && candidate.y1 < lowestLayer)
-                    || (failures == fewestFailures && candidate.y1 == lowestLayer && distance < nearestDistance)) {
-                next = candidate;
-                fewestFailures = failures;
-                lowestLayer = candidate.y1;
-                nearestDistance = distance;
-            }
-        }
+        Cuboid next = MiningCellScheduler.choose(task.cells, task.failedAttempts, playerPos);
         if (next == null) {
             finishMiningTask();
             return;
