@@ -224,14 +224,7 @@ public final class HiveTaskClient {
                     sendEvent("Recovery requeue ignored because no mining cell is active.");
                     return;
                 }
-                cancelNative();
-                MiningSafety.disarmBreaking();
-                task.cells.addLast(task.currentCell);
-                sendEvent("Recovery supervisor requeued unreachable cell " + task.currentCell + ".");
-                task.currentCell = null;
-                blocker = "Recovery supervisor requeued the current cell.";
-                setStage(Stage.RECOVERING, blocker);
-                nextCellPending = true;
+                recover("Recovery supervisor abandoned the stalled cell route.");
             }
             default -> sendEvent("Unsupported recovery action ignored: " + action);
         }
