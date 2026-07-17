@@ -65,6 +65,7 @@ public final class HiveTaskClient {
     private static final Minecraft MC = Minecraft.getInstance();
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MAX_CLIENT_WORK_PER_TICK = 8;
+    private static final int MAX_EMPTY_CELLS_PER_TICK = 32;
     private static final int CELL_SIZE = envInt("TASK_CELL_SIZE", 12, 4, 32);
     private static final int LAYER_HEIGHT = envInt("TASK_LAYER_HEIGHT", 5, 2, 8);
     private static final float BLOCK_REACH = (float) envDouble("TASK_BLOCK_REACH", 3.0D, 3.0D, 6.0D);
@@ -133,6 +134,7 @@ public final class HiveTaskClient {
     private BlockPos lastPickupGoal;
     private int pickupInitialPickaxeCount;
     private boolean worldTimeoutTriggered;
+    private boolean nextCellPending;
     private String blocker = "";
 
     private static final HiveTaskClient INSTANCE = new HiveTaskClient();
@@ -517,6 +519,11 @@ public final class HiveTaskClient {
             return;
         }
 
+        if (nextCellPending) {
+            beginNextCell();
+            return;
+        }
+
         if (stage == Stage.TRAVELLING) {
             tickTravel(now, player);
         } else if (stage == Stage.MINING) {
@@ -539,20 +546,24 @@ public final class HiveTaskClient {
 
     private void beginNextCell() {
         if (task == null || task.kind != TaskKind.MINE_CUBOID || MC.player == null) return;
-        BlockPos playerPos = MC.player.blockPosition();
-        Cuboid next = MiningCellScheduler.choose(task.cells, task.failedAttempts, playerPos);
-        if (next == null) {
-            finishMiningTask();
-            return;
+        nextCellPending = true;
+        for (int checked = 0; checked < MAX_EMPTY_CELLS_PER_TICK && nextCellPending; checked++) {
+            nextCellPending = false;
+            BlockPos playerPos = MC.player.blockPosition();
+            Cuboid next = MiningCellScheduler.choose(task.cells, task.failedAttempts, playerPos);
+            if (next == null) {
+                finishMiningTask();
+                return;
+            }
+            task.cells.remove(next);
+            task.currentCell = next;
+            task.travelAttempts = 0;
+            task.cleaningSupports = false;
+            task.descendingSupports = false;
+            task.cellSnapshot.clear();
+            task.cellPassMined = 0;
+            beginTravel(next.center(), true);
         }
-        task.cells.remove(next);
-        task.currentCell = next;
-        task.travelAttempts = 0;
-        task.cleaningSupports = false;
-        task.descendingSupports = false;
-        task.cellSnapshot.clear();
-        task.cellPassMined = 0;
-        beginTravel(next.center(), true);
     }
 
     private void beginTravel(BlockPos destination, boolean toMiningCell) {
@@ -572,7 +583,7 @@ public final class HiveTaskClient {
             task.cellSnapshot.putAll(snapshot);
             if (currentCellChunksLoaded() && snapshot.isEmpty()) {
                 task.cellInitialBlocks = 0;
-                completeCurrentCell();
+                completeCurrentCell(false);
                 return;
             }
             BlockPos playerPos = MC.player.blockPosition();
@@ -1386,6 +1397,10 @@ public final class HiveTaskClient {
     }
 
     private void completeCurrentCell() {
+        completeCurrentCell(true);
+    }
+
+    private void completeCurrentCell(boolean report) {
         cancelNative();
         MiningSafety.disarmBreaking();
         task.cleaningSupports = false;
@@ -1394,9 +1409,11 @@ public final class HiveTaskClient {
         task.failedAttempts.remove(task.currentCell.toString());
         task.escapeAttempted.remove(task.currentCell.toString());
         task.escapeDescentAttempted.remove(task.currentCell.toString());
-        sendEvent("Completed cell " + task.currentCell + " (" + task.completedCells + "/" + task.totalCells + ").");
+        if (report) {
+            sendEvent("Completed cell " + task.currentCell + " (" + task.completedCells + "/" + task.totalCells + ").");
+        }
         task.currentCell = null;
-        beginNextCell();
+        nextCellPending = true;
     }
 
     private void recover(String reason) {
@@ -1426,7 +1443,7 @@ public final class HiveTaskClient {
             task.blockedCells.add(task.currentCell);
             sendEvent("Marked cell blocked after " + attempt + " safe retries: " + task.currentCell + ". Continuing other cells.");
             task.currentCell = null;
-            beginNextCell();
+            nextCellPending = true;
             return;
         }
 
@@ -1487,6 +1504,7 @@ public final class HiveTaskClient {
         clearToolPickupState();
         MiningSafety.endManagedTask();
         task = null;
+        nextCellPending = false;
         blocker = "";
         setStage(Stage.IDLE, "");
         if (report && message != null) {
