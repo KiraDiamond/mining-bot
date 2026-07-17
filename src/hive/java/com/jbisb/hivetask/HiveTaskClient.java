@@ -190,8 +190,50 @@ public final class HiveTaskClient {
             clientWork.add(() -> startTask(incoming));
         } else if ("stop".equals(type)) {
             clientWork.add(() -> stopTask("Stopped by controller.", true));
+        } else if ("recover".equals(type)) {
+            String action = string(message, "action", "");
+            clientWork.add(() -> handleRecoveryAction(action));
         } else if ("ping".equals(type)) {
             sendStatus();
+        }
+    }
+
+    private void handleRecoveryAction(String action) {
+        if (task == null || MC.player == null || MC.level == null) {
+            sendEvent("Recovery request ignored because no active in-world task exists.");
+            return;
+        }
+        switch (action) {
+            case "retry_path" -> {
+                sendEvent("Recovery supervisor requested a clean path recalculation.");
+                cancelNative();
+                MiningSafety.disarmBreaking();
+                blocker = "Recovery supervisor requested path recalculation.";
+                resumeCurrentTask();
+            }
+            case "escape" -> {
+                if (task.kind != TaskKind.MINE_CUBOID || task.currentCell == null) {
+                    sendEvent("Recovery escape ignored because no mining cell is active.");
+                    return;
+                }
+                sendEvent("Recovery supervisor requested coordinate-gated escape.");
+                escapeOrRecover("Recovery supervisor detected a trapped route.");
+            }
+            case "requeue_cell" -> {
+                if (task.kind != TaskKind.MINE_CUBOID || task.currentCell == null) {
+                    sendEvent("Recovery requeue ignored because no mining cell is active.");
+                    return;
+                }
+                cancelNative();
+                MiningSafety.disarmBreaking();
+                task.cells.addLast(task.currentCell);
+                sendEvent("Recovery supervisor requeued unreachable cell " + task.currentCell + ".");
+                task.currentCell = null;
+                blocker = "Recovery supervisor requeued the current cell.";
+                setStage(Stage.RECOVERING, blocker);
+                nextCellPending = true;
+            }
+            default -> sendEvent("Unsupported recovery action ignored: " + action);
         }
     }
 
