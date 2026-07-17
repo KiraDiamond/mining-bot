@@ -597,6 +597,7 @@ public final class HiveTaskClient {
             task.cleaningSupports = false;
             task.descendingSupports = false;
             task.cellSnapshot.clear();
+            task.failedAccessPositions.clear();
             task.cellPassMined = 0;
             beginTravel(next.center(), true);
         }
@@ -855,6 +856,9 @@ public final class HiveTaskClient {
             beginDirectBreakFallback(reachableTarget);
         } else if (reachableTarget == null && idleFor >= INACTIVE_TIMEOUT_MS) {
             sendEvent("No snapshotted block is visible within reach; moving to a usable face of the current cell.");
+            if (task.travelDestination != null) {
+                task.failedAccessPositions.add(task.travelDestination.asLong());
+            }
             beginTravel(task.currentCell.center(), true);
         } else if (!active && now - lastNativeActiveMs >= INACTIVE_TIMEOUT_MS) {
             escapeOrRecover("Native Baritone became inactive with " + remaining + " snapshotted blocks remaining.");
@@ -992,9 +996,7 @@ public final class HiveTaskClient {
 
     private BlockPos cellAccessDestination(BlockPos playerPos) {
         Cuboid cell = task.currentCell;
-        BlockPos preferredTarget = cell.containsHorizontal(playerPos)
-            ? farthestSnapshotBlock(playerPos)
-            : null;
+        BlockPos preferredTarget = nearestSnapshotBlock(playerPos);
         int belowY = Math.max(task.cuboid.y1, cell.y1 - 2);
         List<BlockPos> candidates = new ArrayList<>();
         for (int x = cell.x1; x <= cell.x2; x++) {
@@ -1019,11 +1021,11 @@ public final class HiveTaskClient {
         nearest = nearestOpenCellAccess(candidates, playerPos, preferredTarget);
         if (nearest != null) return nearest;
 
-        return new BlockPos(
-            clamp(playerPos.getX(), cell.x1, cell.x2),
-            cell.y2 + 1,
-            clamp(playerPos.getZ(), cell.z1, cell.z2)
-        );
+        if (preferredTarget != null) {
+            return new BlockPos(preferredTarget.getX(), cell.y2 + 1, preferredTarget.getZ());
+        }
+        return new BlockPos(clamp(playerPos.getX(), cell.x1, cell.x2), cell.y2 + 1,
+            clamp(playerPos.getZ(), cell.z1, cell.z2));
     }
 
     private BlockPos nearestOpenCellAccess(List<BlockPos> candidates, BlockPos playerPos, BlockPos preferredTarget) {
@@ -1032,7 +1034,12 @@ public final class HiveTaskClient {
         double nearestTargetDistance = Double.POSITIVE_INFINITY;
         double nearestDistance = Double.POSITIVE_INFINITY;
         for (BlockPos candidate : candidates) {
-            if (!task.cuboid.contains(candidate) || !isOpenCellAccess(candidate)) continue;
+            if (!task.cuboid.contains(candidate)
+                    || task.failedAccessPositions.contains(candidate.asLong())
+                    || !isOpenCellAccess(candidate)
+                    || (preferredTarget != null && !withinBreakReachFromAccess(candidate, preferredTarget))) {
+                continue;
+            }
             boolean hasFooting = hasStableFooting(candidate);
             double targetDistance = preferredTarget == null ? 0.0D : candidate.distSqr(preferredTarget);
             double distance = candidate.distSqr(playerPos);
@@ -1049,18 +1056,26 @@ public final class HiveTaskClient {
         return nearest;
     }
 
-    private BlockPos farthestSnapshotBlock(BlockPos playerPos) {
-        BlockPos farthest = null;
-        double farthestDistance = -1.0D;
+    private BlockPos nearestSnapshotBlock(BlockPos playerPos) {
+        BlockPos nearest = null;
+        double nearestDistance = Double.POSITIVE_INFINITY;
         for (long key : task.cellSnapshot.keySet()) {
             BlockPos candidate = BlockPos.of(key);
             double distance = candidate.distSqr(playerPos);
-            if (distance > farthestDistance) {
-                farthest = candidate;
-                farthestDistance = distance;
+            if (distance < nearestDistance) {
+                nearest = candidate;
+                nearestDistance = distance;
             }
         }
-        return farthest;
+        return nearest;
+    }
+
+    private boolean withinBreakReachFromAccess(BlockPos access, BlockPos target) {
+        Vec3 eyes = new Vec3(access.getX() + 0.5D, access.getY() + 1.62D, access.getZ() + 0.5D);
+        double nearestX = Math.max(target.getX(), Math.min(eyes.x, target.getX() + 1.0D));
+        double nearestY = Math.max(target.getY(), Math.min(eyes.y, target.getY() + 1.0D));
+        double nearestZ = Math.max(target.getZ(), Math.min(eyes.z, target.getZ() + 1.0D));
+        return eyes.distanceToSqr(nearestX, nearestY, nearestZ) <= BLOCK_REACH * BLOCK_REACH;
     }
 
     private boolean isOpenCellAccess(BlockPos pos) {
@@ -1800,6 +1815,7 @@ public final class HiveTaskClient {
         private final Map<Long, Block> escapeSnapshot = new HashMap<>();
         private final Set<String> escapeAttempted = new HashSet<>();
         private final Set<String> escapeDescentAttempted = new HashSet<>();
+        private final Set<Long> failedAccessPositions = new HashSet<>();
         private boolean cellsInitialized;
         private boolean travelToCell;
         private boolean escapeClearing;
