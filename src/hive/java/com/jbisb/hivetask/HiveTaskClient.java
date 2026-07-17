@@ -1549,6 +1549,9 @@ public final class HiveTaskClient {
 
     private void configureMiningTravelSettings() {
         configureMiningSettings();
+        // Jungle routes may require climbing vines to reach top-down cells. Travel
+        // uses goal-directed progress tracking, so climb/fall loops still time out.
+        BaritoneAPI.getSettings().allowVines.value = true;
         BaritoneAPI.getSettings().allowPlace.value = true;
         BaritoneAPI.getSettings().allowParkourPlace.value = false;
     }
