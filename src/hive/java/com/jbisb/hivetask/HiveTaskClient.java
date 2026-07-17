@@ -622,7 +622,7 @@ public final class HiveTaskClient {
     private void tickTravel(long now, LocalPlayer player) {
         BlockPos destination = task.travelDestination;
         if (destination == null) return;
-        watchdog.observe(now, player.position(), 0);
+        watchdog.observeToward(now, player.position(), 0, Vec3.atCenterOf(destination));
         if (task.travelToCell) {
             if (task.currentCell != null
                     && nearestReachableSnapshotBlock(player) != null
@@ -1218,12 +1218,12 @@ public final class HiveTaskClient {
     }
 
     private void tickEscapeTraversal(long now, LocalPlayer player) {
-        watchdog.observe(now, player.position(), 0);
         BlockPos destination = task.escapeDestination;
         if (destination == null) {
             recover("Escape traversal lost its destination.");
             return;
         }
+        watchdog.observeToward(now, player.position(), 0, Vec3.atCenterOf(destination));
         if (task.currentCell.containsHorizontal(player.blockPosition())) {
             sendEvent("Stepped safely into the assigned cell; resuming its snapshot.");
             startMiningCell();
