@@ -16,6 +16,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.item.ItemEntity;
@@ -756,6 +757,10 @@ public final class HiveTaskClient {
                     if (state.isAir() || !state.getFluidState().isEmpty()) continue;
                     if (excludePlacedSupports && MiningSafety.isPlacedSupport(pos, state)) continue;
                     Block block = state.getBlock();
+                    if (state.is(BlockTags.LEAVES)) {
+                        dynamicProtected.add(block);
+                        continue;
+                    }
                     if (MiningSafety.isProtected(block) || MC.level.getBlockEntity(pos) != null) {
                         dynamicProtected.add(block);
                         continue;
