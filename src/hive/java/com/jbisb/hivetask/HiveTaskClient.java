@@ -1524,6 +1524,9 @@ public final class HiveTaskClient {
             recover(reason);
             return;
         }
+        if (task.travelDestination != null) {
+            task.failedAccessPositions.add(task.travelDestination.asLong());
+        }
         cancelNative();
         MiningSafety.disarmBreaking();
         blocker = reason;
