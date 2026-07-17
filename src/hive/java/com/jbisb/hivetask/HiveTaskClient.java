@@ -846,7 +846,7 @@ public final class HiveTaskClient {
         }
         BlockPos reachableTarget = nearestReachableSnapshotBlock(player);
         if (idleFor >= DIRECT_BREAK_FALLBACK_MS && reachableTarget != null) {
-            beginDirectBreakFallback();
+            beginDirectBreakFallback(reachableTarget);
         } else if (reachableTarget == null && idleFor >= INACTIVE_TIMEOUT_MS) {
             sendEvent("No snapshotted block is visible within reach; moving to a usable face of the current cell.");
             beginTravel(task.currentCell.center(), true);
@@ -861,13 +861,16 @@ public final class HiveTaskClient {
         }
     }
 
-    private void beginDirectBreakFallback() {
-        if (task == null || task.currentCell == null || task.cellSnapshot.isEmpty() || MC.player == null) return;
+    private void beginDirectBreakFallback(BlockPos target) {
+        if (task == null || task.currentCell == null || task.cellSnapshot.isEmpty()
+                || MC.player == null || target == null) return;
         cancelNative();
         configureBreakOnlySettings();
         MiningSafety.armBreaking(task.cellSnapshot);
         task.directBreakFallback = true;
-        task.directBreakTarget = null;
+        task.directBreakTarget = target.immutable();
+        task.directBreakClickStarted = false;
+        task.directBreakStartedMs = System.currentTimeMillis();
         watchdog.reset(System.currentTimeMillis(), MC.player.position(), task.cellSnapshot.size());
         sendEvent("Builder stalled; completing one reachable block before replanning the cell.");
     }
@@ -887,20 +890,19 @@ public final class HiveTaskClient {
 
         BlockPos target = previousTarget;
         if (target == null) {
-            target = nearestReachableSnapshotBlock(player);
-            if (target == null) {
-                task.directBreakFallback = false;
-                restartMiningBuilder();
-                return;
-            }
-            task.directBreakTarget = target;
+            task.directBreakFallback = false;
+            restartMiningBuilder();
+            return;
         }
 
         var rotation = RotationUtils.reachable(primaryBaritone().getPlayerContext(), target, BLOCK_REACH);
         if (rotation.isEmpty()) {
-            resetDirectBreak();
-            task.directBreakFallback = false;
-            restartMiningBuilder();
+            if (now - task.directBreakStartedMs >= INACTIVE_TIMEOUT_MS) {
+                sendEvent("Direct block target moved out of reach; repositioning instead of resetting its break.");
+                resetDirectBreak();
+                task.directBreakFallback = false;
+                beginTravel(task.currentCell.center(), true);
+            }
             return;
         }
 
@@ -918,18 +920,19 @@ public final class HiveTaskClient {
         player.setXRot(targetRotation.getPitch());
         HitResult trace = RayTraceUtils.rayTraceTowards(player, targetRotation, BLOCK_REACH);
         if (!(trace instanceof BlockHitResult blockHit) || !target.equals(blockHit.getBlockPos())) {
-            if (watchdog.idleFor(now) >= INACTIVE_TIMEOUT_MS) {
+            if (now - task.directBreakStartedMs >= INACTIVE_TIMEOUT_MS) {
+                sendEvent("Direct block target is obstructed; repositioning without restarting a partial break.");
                 resetDirectBreak();
                 task.directBreakFallback = false;
-                restartMiningBuilder();
+                beginTravel(task.currentCell.center(), true);
             }
             return;
         }
 
         var controller = primaryBaritone().getPlayerContext().playerController();
-        if (!target.equals(previousTarget)) {
+        if (!task.directBreakClickStarted) {
             controller.resetBlockRemoving();
-            controller.clickBlock(target, blockHit.getDirection());
+            task.directBreakClickStarted = controller.clickBlock(target, blockHit.getDirection());
         } else {
             controller.onPlayerDamageBlock(target, blockHit.getDirection());
         }
@@ -1388,6 +1391,8 @@ public final class HiveTaskClient {
         if (task != null) {
             task.escapeBreakTarget = null;
             task.directBreakTarget = null;
+            task.directBreakClickStarted = false;
+            task.directBreakStartedMs = 0L;
         }
         try {
             primaryBaritone().getPlayerContext().playerController().resetBlockRemoving();
@@ -1796,11 +1801,13 @@ public final class HiveTaskClient {
         private boolean cleaningSupports;
         private boolean descendingSupports;
         private boolean directBreakFallback;
+        private boolean directBreakClickStarted;
         private Cuboid currentCell;
         private BlockPos travelDestination;
         private BlockPos escapeDestination;
         private BlockPos escapeBreakTarget;
         private BlockPos directBreakTarget;
+        private long directBreakStartedMs;
         private int totalCells;
         private int completedCells;
         private int travelAttempts;
