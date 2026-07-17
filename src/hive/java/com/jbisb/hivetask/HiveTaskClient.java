@@ -626,10 +626,6 @@ public final class HiveTaskClient {
             destination = cellAccessDestination(playerPos);
             task.travelDestination = destination;
             MiningSafety.armBreaking(task.cellSnapshot, currentScaffoldColumn());
-            if (nearestReachableSnapshotBlock(MC.player) != null) {
-                startMiningCell();
-                return;
-            }
         } else {
             MiningSafety.disarmBreaking();
             configureTravelSettings();
@@ -657,6 +653,9 @@ public final class HiveTaskClient {
         watchdog.observeToward(now, player.position(), 0, Vec3.atCenterOf(destination));
         if (task.travelToCell) {
             if (task.currentCell != null
+                    && player.onGround()
+                    && player.blockPosition().getY() >= destination.getY()
+                    && horizontalDistanceSqr(player.blockPosition(), destination) <= 2.0D
                     && nearestReachableSnapshotBlock(player) != null
                     && currentCellChunksLoaded()) {
                 startMiningCell();
@@ -664,6 +663,7 @@ public final class HiveTaskClient {
             }
             if (task.currentCell != null
                     && player.blockPosition().equals(destination)
+                    && player.onGround()
                     && currentCellChunksLoaded()) {
                 startMiningCell();
                 return;
@@ -694,6 +694,12 @@ public final class HiveTaskClient {
         } else if (idleFor >= STUCK_TIMEOUT_MS) {
             recoverTravel("No walking progress for " + STUCK_TIMEOUT_MS / 1000L + " seconds.");
         }
+    }
+
+    private static double horizontalDistanceSqr(BlockPos first, BlockPos second) {
+        double dx = first.getX() - second.getX();
+        double dz = first.getZ() - second.getZ();
+        return dx * dx + dz * dz;
     }
 
     private boolean tryOpenNearbyAccess(LocalPlayer player) {
