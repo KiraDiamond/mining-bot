@@ -82,6 +82,8 @@ public final class HiveTaskClient {
     private static final long TOOL_SCAN_INTERVAL_MS = envLong("TASK_TOOL_SCAN_INTERVAL_MS", 500L);
     private static final long TOOL_PICKUP_TIMEOUT_MS = envLong("TASK_TOOL_PICKUP_TIMEOUT_MS", 30000L);
     private static final long TOOL_PICKUP_RETRY_DELAY_MS = envLong("TASK_TOOL_PICKUP_RETRY_DELAY_MS", 10000L);
+    private static final double COARSE_APPROACH_DISTANCE_SQR = 64.0D * 64.0D;
+    private static final double COARSE_APPROACH_COMPLETE_SQR = 8.0D * 8.0D;
     private static final Set<Item> TERRAIN_ITEMS = Set.of(
         Blocks.DIRT.asItem(),
         Blocks.COARSE_DIRT.asItem(),
@@ -612,6 +614,7 @@ public final class HiveTaskClient {
         task.escapeDescending = false;
         task.travelToCell = toMiningCell;
         blocker = "";
+        BlockPos playerPos = MC.player.blockPosition();
 
         if (toMiningCell && task.currentCell != null) {
             configureMiningTravelSettings();
@@ -623,7 +626,6 @@ public final class HiveTaskClient {
                 completeCurrentCell(false);
                 return;
             }
-            BlockPos playerPos = MC.player.blockPosition();
             destination = cellAccessDestination(playerPos);
             task.travelDestination = destination;
             MiningSafety.armBreaking(task.cellSnapshot, currentScaffoldColumn());
@@ -638,11 +640,21 @@ public final class HiveTaskClient {
 
         IBaritone baritone = primaryBaritone();
         if (toMiningCell) {
-            baritone.getCustomGoalProcess().setGoalAndPath(new GoalBlock(destination));
-            sendEvent("Travelling to cell " + task.currentCell
-                + " via " + destination
-                + " with breaking restricted to " + task.cellSnapshot.size() + " snapshotted cell block(s).");
+            task.coarseTravel = horizontalDistanceSqr(playerPos, destination) > COARSE_APPROACH_DISTANCE_SQR;
+            if (task.coarseTravel) {
+                MiningSafety.disarmBreaking();
+                configureTravelSettings();
+                baritone.getCustomGoalProcess().setGoalAndPath(new GoalXZ(destination.getX(), destination.getZ()));
+                sendEvent("Approaching distant cell column " + task.currentCell
+                    + " non-destructively before exact Y-level routing.");
+            } else {
+                baritone.getCustomGoalProcess().setGoalAndPath(new GoalBlock(destination));
+                sendEvent("Travelling to cell " + task.currentCell
+                    + " via " + destination
+                    + " with breaking restricted to " + task.cellSnapshot.size() + " snapshotted cell block(s).");
+            }
         } else {
+            task.coarseTravel = false;
             baritone.getCustomGoalProcess().setGoalAndPath(new GoalBlock(destination));
             sendEvent("Travelling non-destructively to " + destination + ".");
         }
@@ -653,6 +665,12 @@ public final class HiveTaskClient {
         if (destination == null) return;
         watchdog.observeToward(now, player.position(), 0, Vec3.atCenterOf(destination));
         if (task.travelToCell) {
+            if (task.coarseTravel
+                    && horizontalDistanceSqr(player.blockPosition(), destination) <= COARSE_APPROACH_COMPLETE_SQR) {
+                sendEvent("Reached the distant cell column; calculating exact mining access.");
+                beginTravel(task.currentCell.center(), true);
+                return;
+            }
             if (task.currentCell != null
                     && player.onGround()
                     && player.blockPosition().getY() >= destination.getY()
@@ -1588,7 +1606,7 @@ public final class HiveTaskClient {
     private void configureTravelSettings() {
         MiningSafety.setBreakReach(BLOCK_REACH);
         BaritoneAPI.getSettings().blockReachDistance.value = BLOCK_REACH;
-        BaritoneAPI.getSettings().allowVines.value = false;
+        configureVineAvoidance();
         BaritoneAPI.getSettings().allowBreak.value = false;
         BaritoneAPI.getSettings().allowPlace.value = false;
         BaritoneAPI.getSettings().allowParkour.value = false;
@@ -1602,7 +1620,7 @@ public final class HiveTaskClient {
     private void configureMiningSettings() {
         MiningSafety.setBreakReach(BLOCK_REACH);
         BaritoneAPI.getSettings().blockReachDistance.value = BLOCK_REACH;
-        BaritoneAPI.getSettings().allowVines.value = false;
+        configureVineAvoidance();
         BaritoneAPI.getSettings().autoTool.value = true;
         BaritoneAPI.getSettings().assumeExternalAutoTool.value = false;
         BaritoneAPI.getSettings().allowInventory.value = true;
@@ -1614,6 +1632,15 @@ public final class HiveTaskClient {
         BaritoneAPI.getSettings().itemSaver.value = true;
         BaritoneAPI.getSettings().itemSaverThreshold.value = task == null ? 10 : task.minDurability;
         applyProtectedBlocks(new HashSet<>(MiningSafety.protectedBlocks()));
+    }
+
+    private void configureVineAvoidance() {
+        BaritoneAPI.getSettings().allowVines.value = false;
+        List<Block> avoided = new ArrayList<>(BaritoneAPI.getSettings().blocksToAvoid.value);
+        if (!avoided.contains(Blocks.VINE)) {
+            avoided.add(Blocks.VINE);
+            BaritoneAPI.getSettings().blocksToAvoid.value = avoided;
+        }
     }
 
     private void configureMiningTravelSettings() {
@@ -1821,6 +1848,7 @@ public final class HiveTaskClient {
         private final Set<Long> failedAccessPositions = new HashSet<>();
         private boolean cellsInitialized;
         private boolean travelToCell;
+        private boolean coarseTravel;
         private boolean escapeClearing;
         private boolean escapeDescending;
         private boolean cleaningSupports;
