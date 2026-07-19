@@ -939,6 +939,13 @@ public final class HiveTaskClient {
         if (target != null) {
             beginDirectBreakFallback(target);
         } else {
+            if (task.travelDestination != null) {
+                task.failedAccessPositions.add(task.travelDestination.asLong());
+            }
+            if (task.failedAccessPositions.size() >= 4) {
+                recover("No block was reachable from four safe cell faces.");
+                return;
+            }
             sendEvent("No snapshotted block is currently reachable; moving to another safe face.");
             beginTravel(task.currentCell.center(), true);
         }
