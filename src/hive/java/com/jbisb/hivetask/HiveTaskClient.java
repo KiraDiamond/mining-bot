@@ -934,11 +934,14 @@ public final class HiveTaskClient {
         setStage(Stage.MINING, "");
         watchdog.reset(stageSinceMs, MC.player.position(), task.cellSnapshot.size());
         lastNativeActiveMs = stageSinceMs;
-        primaryBaritone().getBuilderProcess().clearArea(
-            new BlockPos(task.currentCell.x1, task.currentCell.y1, task.currentCell.z1),
-            new BlockPos(task.currentCell.x2, task.currentCell.y2, task.currentCell.z2)
-        );
         sendEvent("Snapshotted " + snapshot.size() + " breakable blocks and started cell " + task.currentCell + ".");
+        BlockPos target = nearestReachableSnapshotBlock(MC.player);
+        if (target != null) {
+            beginDirectBreakFallback(target);
+        } else {
+            sendEvent("No snapshotted block is currently reachable; moving to another safe face.");
+            beginTravel(task.currentCell.center(), true);
+        }
     }
 
     private Map<Long, Block> snapshotCell(Cuboid cell) {
@@ -1040,7 +1043,7 @@ public final class HiveTaskClient {
         task.directBreakClickStarted = false;
         task.directBreakStartedMs = System.currentTimeMillis();
         watchdog.reset(System.currentTimeMillis(), MC.player.position(), task.cellSnapshot.size());
-        sendEvent("Builder stalled; completing one reachable block before replanning the cell.");
+        sendEvent("Locked one reachable snapshotted block for complete one-at-a-time mining.");
     }
 
     private void tickDirectBreakFallback(long now, LocalPlayer player) {
@@ -1126,16 +1129,13 @@ public final class HiveTaskClient {
 
     private void restartMiningBuilder() {
         if (task == null || task.currentCell == null || task.cellSnapshot.isEmpty() || MC.player == null) return;
-        cancelNative();
-        configureMiningSettings();
-        MiningSafety.armBreaking(task.cellSnapshot, currentScaffoldColumn());
-        setStage(Stage.MINING, "");
-        watchdog.reset(stageSinceMs, MC.player.position(), task.cellSnapshot.size());
-        lastNativeActiveMs = stageSinceMs;
-        primaryBaritone().getBuilderProcess().clearArea(
-            new BlockPos(task.currentCell.x1, task.currentCell.y1, task.currentCell.z1),
-            new BlockPos(task.currentCell.x2, task.currentCell.y2, task.currentCell.z2)
-        );
+        BlockPos next = nearestReachableSnapshotBlock(MC.player);
+        if (next != null) {
+            beginDirectBreakFallback(next);
+            return;
+        }
+        sendEvent("No remaining snapshotted block is reachable from this face; repositioning safely.");
+        beginTravel(task.currentCell.center(), true);
     }
 
     private Cuboid currentScaffoldColumn() {
