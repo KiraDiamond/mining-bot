@@ -652,6 +652,7 @@ public final class HiveTaskClient {
         task.escapeDestination = null;
         task.escapeClearing = false;
         task.escapeDescending = false;
+        task.resumeTravelAfterDescent = false;
         task.travelToCell = toMiningCell;
         task.coarseTravel = false;
         blocker = "";
@@ -723,6 +724,14 @@ public final class HiveTaskClient {
             boolean calculating = primaryBaritone().getPathingBehavior().getInProgress().isPresent();
             if (active || calculating) lastNativeActiveMs = now;
             long idleFor = watchdog.idleFor(now);
+            if (!active
+                    && !calculating
+                    && now - stageSinceMs >= INACTIVE_TIMEOUT_MS
+                    && player.blockPosition().getY() > task.cuboid.y1 + 3
+                    && beginCoarseApproachDescent(
+                        "Coarse route is stranded above the excavation floor; descending its support column.")) {
+                return;
+            }
             if (!active && !calculating && now - stageSinceMs >= INACTIVE_TIMEOUT_MS) {
                 recoverTravel("Native Baritone stopped during the non-destructive cell approach.");
             } else if (idleFor >= STUCK_TIMEOUT_MS) {
@@ -837,6 +846,18 @@ public final class HiveTaskClient {
         task.escapeDestination = task.travelDestination;
         blocker = reason;
         return beginEscapeDescent();
+    }
+
+    private boolean beginCoarseApproachDescent(String reason) {
+        task.escapeDestination = null;
+        task.resumeTravelAfterDescent = true;
+        blocker = reason;
+        if (beginEscapeDescent()) {
+            sendEvent("No horizontal route exists from the elevated support; descending before retrying.");
+            return true;
+        }
+        task.resumeTravelAfterDescent = false;
+        return false;
     }
 
     private boolean currentCellChunksLoaded() {
@@ -1288,10 +1309,14 @@ public final class HiveTaskClient {
             if (!support.equals(task.escapeBreakTarget)) {
                 controller.resetBlockRemoving();
                 task.escapeBreakTarget = support.immutable();
-                controller.clickBlock(support, Direction.UP);
+                task.escapeBreakClickStarted = false;
+            }
+            if (!task.escapeBreakClickStarted) {
+                task.escapeBreakClickStarted = controller.clickBlock(support, Direction.UP);
             } else {
                 controller.onPlayerDamageBlock(support, Direction.UP);
             }
+            player.swing(InteractionHand.MAIN_HAND);
             return;
         }
         resetDirectBreak();
@@ -1466,6 +1491,7 @@ public final class HiveTaskClient {
         watchdog.reset(stageSinceMs, MC.player.position(), snapshot.size());
         lastNativeActiveMs = stageSinceMs;
         task.escapeBreakTarget = null;
+        task.escapeBreakClickStarted = false;
         sendEvent("Horizontal escape is blocked; directly clearing " + snapshot.size()
             + " exact snapshotted support block(s) without placement.");
         return true;
@@ -1480,6 +1506,14 @@ public final class HiveTaskClient {
         watchdog.observeWork(now, remaining);
         if (remaining == 0 || player.blockPosition().getY() <= task.cuboid.y1) {
             resetDirectBreak();
+            if (task.resumeTravelAfterDescent) {
+                task.resumeTravelAfterDescent = false;
+                task.escapeSnapshot.clear();
+                task.escapeDescending = false;
+                sendEvent("Support descent completed; retrying the cell approach from the lower level.");
+                beginTravel(task.currentCell.center(), true);
+                return;
+            }
             beginEscapeTraversal("Support descent completed");
             return;
         }
@@ -1496,10 +1530,14 @@ public final class HiveTaskClient {
             if (!support.equals(task.escapeBreakTarget)) {
                 controller.resetBlockRemoving();
                 task.escapeBreakTarget = support.immutable();
-                controller.clickBlock(support, Direction.UP);
+                task.escapeBreakClickStarted = false;
+            }
+            if (!task.escapeBreakClickStarted) {
+                task.escapeBreakClickStarted = controller.clickBlock(support, Direction.UP);
             } else {
                 controller.onPlayerDamageBlock(support, Direction.UP);
             }
+            player.swing(InteractionHand.MAIN_HAND);
         }
         if (watchdog.idleFor(now) >= STUCK_TIMEOUT_MS) {
             resetDirectBreak();
@@ -1537,6 +1575,7 @@ public final class HiveTaskClient {
     private void resetDirectBreak() {
         if (task != null) {
             task.escapeBreakTarget = null;
+            task.escapeBreakClickStarted = false;
             task.directBreakTarget = null;
             task.directBreakClickStarted = false;
             task.directBreakStartedMs = 0L;
@@ -1816,6 +1855,7 @@ public final class HiveTaskClient {
         }
         if (task != null) {
             task.escapeBreakTarget = null;
+            task.escapeBreakClickStarted = false;
             task.directBreakTarget = null;
             task.directBreakFallback = false;
         }
@@ -1983,6 +2023,7 @@ public final class HiveTaskClient {
         private boolean cellsInitialized;
         private boolean travelToCell;
         private boolean coarseTravel;
+        private boolean resumeTravelAfterDescent;
         private boolean escapeClearing;
         private boolean escapeDescending;
         private boolean cleaningSupports;
@@ -1993,6 +2034,7 @@ public final class HiveTaskClient {
         private BlockPos travelDestination;
         private BlockPos escapeDestination;
         private BlockPos escapeBreakTarget;
+        private boolean escapeBreakClickStarted;
         private BlockPos directBreakTarget;
         private long directBreakStartedMs;
         private int totalCells;
