@@ -10,7 +10,7 @@ import static org.junit.Assert.assertSame;
 
 public class MiningCellSchedulerTest {
     @Test
-    public void highestLayerWinsEvenWhenLowerLayerIsCloser() {
+    public void reachableLayerWinsOverAnInaccessibleUpperLayer() {
         Cuboid low = new Cuboid(0, 60, 0, 3, 64, 3);
         Cuboid high = new Cuboid(100, 95, 100, 103, 100, 103);
 
@@ -20,21 +20,35 @@ public class MiningCellSchedulerTest {
             new BlockPos(0, 64, 0)
         );
 
-        assertSame(high, selected);
+        assertSame(low, selected);
     }
 
     @Test
-    public void failedUpperCellStillWinsOverUntouchedLowerLayer() {
-        Cuboid low = new Cuboid(0, 60, 0, 3, 64, 3);
+    public void highestReachableLayerWinsWhenPlayerCanAccessIt() {
+        Cuboid low = new Cuboid(0, 85, 0, 3, 89, 3);
         Cuboid high = new Cuboid(100, 95, 100, 103, 100, 103);
 
         Cuboid selected = MiningCellScheduler.choose(
             List.of(low, high),
-            Map.of(high.toString(), 2),
-            new BlockPos(0, 64, 0)
+            Map.of(),
+            new BlockPos(100, 92, 100)
         );
 
         assertSame(high, selected);
+    }
+
+    @Test
+    public void lowestLayerWinsWhenAllRemainingLayersAreAboveTheAccessBand() {
+        Cuboid lower = new Cuboid(0, 80, 0, 3, 84, 3);
+        Cuboid upper = new Cuboid(0, 95, 0, 3, 100, 3);
+
+        Cuboid selected = MiningCellScheduler.choose(
+            List.of(upper, lower),
+            Map.of(),
+            new BlockPos(0, 64, 0)
+        );
+
+        assertSame(lower, selected);
     }
 
     @Test

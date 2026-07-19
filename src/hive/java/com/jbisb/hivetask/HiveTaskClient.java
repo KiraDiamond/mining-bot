@@ -3,6 +3,7 @@ package com.jbisb.hivetask;
 import baritone.api.BaritoneAPI;
 import baritone.api.IBaritone;
 import baritone.api.pathing.goals.GoalBlock;
+import baritone.api.pathing.goals.GoalRunAway;
 import baritone.api.pathing.goals.GoalXZ;
 import baritone.api.utils.RayTraceUtils;
 import baritone.api.utils.RotationUtils;
@@ -20,6 +21,7 @@ import net.minecraft.tags.BlockTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.inventory.InventoryMenu;
 import net.minecraft.world.item.Item;
@@ -82,6 +84,12 @@ public final class HiveTaskClient {
     private static final long TOOL_SCAN_INTERVAL_MS = envLong("TASK_TOOL_SCAN_INTERVAL_MS", 500L);
     private static final long TOOL_PICKUP_TIMEOUT_MS = envLong("TASK_TOOL_PICKUP_TIMEOUT_MS", 30000L);
     private static final long TOOL_PICKUP_RETRY_DELAY_MS = envLong("TASK_TOOL_PICKUP_RETRY_DELAY_MS", 10000L);
+    private static final double HOSTILE_TRIGGER_DISTANCE_SQR = 6.0D * 6.0D;
+    private static final double HOSTILE_CLEAR_DISTANCE_SQR = 10.0D * 10.0D;
+    private static final double HOSTILE_ATTACK_DISTANCE_SQR = 3.2D * 3.2D;
+    private static final long HOSTILE_CLEAR_DELAY_MS = 2000L;
+    private static final long HOSTILE_GOAL_INTERVAL_MS = 1000L;
+    private static final long HOSTILE_ATTACK_INTERVAL_MS = 500L;
     private static final double COARSE_APPROACH_DISTANCE_SQR = 64.0D * 64.0D;
     private static final double COARSE_APPROACH_COMPLETE_SQR = 8.0D * 8.0D;
     private static final Set<Item> TERRAIN_ITEMS = Set.of(
@@ -496,8 +504,15 @@ public final class HiveTaskClient {
         if (!task.cellsInitialized) {
             task.cells.addAll(task.cuboid.cells(CELL_SIZE, LAYER_HEIGHT, player.blockPosition()));
             task.totalCells = task.cells.size();
+            task.progress = TaskProgressStore.open(task.id, task.cuboid);
+            Set<String> completed = task.progress.completedCells();
+            task.cells.removeIf(cell -> completed.contains(cell.toString()));
+            task.completedCells = task.totalCells - task.cells.size();
+            task.minedBlocks = task.progress.minedBlocks();
             task.cellsInitialized = true;
-            sendEvent("Prepared " + task.totalCells + " non-overlapping mining cells for " + task.cuboid + ".");
+            sendEvent("Prepared " + task.totalCells + " non-overlapping mining cells for " + task.cuboid
+                + "; restored " + task.completedCells + " completed cell(s) and "
+                + task.minedBlocks + " mined block(s).");
         }
         beginNextCell();
     }
@@ -532,6 +547,8 @@ public final class HiveTaskClient {
 
         if (player.isDeadOrDying()) {
             if (stage != Stage.WAITING_RESPAWN) {
+                pruneSnapshot();
+                deferCurrentCell(false);
                 cancelNative();
                 MiningSafety.disarmBreaking();
                 setStage(Stage.WAITING_RESPAWN, "Died; waiting to respawn safely.");
@@ -541,6 +558,16 @@ public final class HiveTaskClient {
                 lastRespawnAttemptMs = now;
                 player.respawn();
             }
+            return;
+        }
+
+        if (stage == Stage.FLEEING) {
+            tickHostileRetreat(now, player);
+            return;
+        }
+        Monster nearbyHostile = nearestHostile(player, HOSTILE_TRIGGER_DISTANCE_SQR);
+        if (nearbyHostile != null) {
+            beginHostileRetreat(now, nearbyHostile);
             return;
         }
 
@@ -571,6 +598,116 @@ public final class HiveTaskClient {
         }
     }
 
+    private Monster nearestHostile(LocalPlayer player, double maximumDistanceSqr) {
+        if (MC.level == null) return null;
+        Monster nearest = null;
+        double nearestDistance = maximumDistanceSqr;
+        for (Entity entity : MC.level.entitiesForRendering()) {
+            if (!(entity instanceof Monster monster) || !monster.isAlive()) continue;
+            double distance = monster.distanceToSqr(player);
+            if (distance <= nearestDistance) {
+                nearest = monster;
+                nearestDistance = distance;
+            }
+        }
+        return nearest;
+    }
+
+    private List<BlockPos> nearbyHostilePositions(LocalPlayer player, double maximumDistanceSqr) {
+        List<BlockPos> positions = new ArrayList<>();
+        if (MC.level == null) return positions;
+        for (Entity entity : MC.level.entitiesForRendering()) {
+            if (entity instanceof Monster monster
+                    && monster.isAlive()
+                    && monster.distanceToSqr(player) <= maximumDistanceSqr) {
+                positions.add(monster.blockPosition());
+            }
+        }
+        return positions;
+    }
+
+    private void beginHostileRetreat(long now, Monster hostile) {
+        if (task == null) return;
+        pruneSnapshot();
+        cancelNative();
+        MiningSafety.disarmBreaking();
+        configureTravelSettings();
+        task.hostileClearSinceMs = 0L;
+        task.lastHostileGoalMs = 0L;
+        task.lastHostileAttackMs = 0L;
+        setStage(Stage.FLEEING, "Hostile mob within six blocks; retreating without breaking or placing.");
+        sendEvent("Hostile " + hostile.getType().toString()
+            + " detected nearby; retreating safely and deferring the current cell.");
+        updateHostileRetreatGoal(now, MC.player);
+    }
+
+    private void tickHostileRetreat(long now, LocalPlayer player) {
+        Monster attackTarget = nearestHostile(player, HOSTILE_ATTACK_DISTANCE_SQR);
+        if (attackTarget != null && MC.gameMode != null
+                && now - task.lastHostileAttackMs >= HOSTILE_ATTACK_INTERVAL_MS
+                && player.getAttackStrengthScale(0.0F) >= 0.9F) {
+            task.lastHostileAttackMs = now;
+            MC.gameMode.attack(player, attackTarget);
+            player.swing(InteractionHand.MAIN_HAND);
+        }
+
+        List<BlockPos> hostiles = nearbyHostilePositions(player, HOSTILE_CLEAR_DISTANCE_SQR);
+        if (hostiles.isEmpty()) {
+            if (task.hostileClearSinceMs == 0L) {
+                task.hostileClearSinceMs = now;
+            } else if (now - task.hostileClearSinceMs >= HOSTILE_CLEAR_DELAY_MS) {
+                finishHostileRetreat();
+            }
+            return;
+        }
+
+        task.hostileClearSinceMs = 0L;
+        if (now - task.lastHostileGoalMs >= HOSTILE_GOAL_INTERVAL_MS) {
+            updateHostileRetreatGoal(now, player);
+        }
+    }
+
+    private void updateHostileRetreatGoal(long now, LocalPlayer player) {
+        if (player == null) return;
+        List<BlockPos> hostiles = nearbyHostilePositions(player, HOSTILE_CLEAR_DISTANCE_SQR);
+        if (hostiles.isEmpty()) return;
+        task.lastHostileGoalMs = now;
+        configureTravelSettings();
+        primaryBaritone().getCustomGoalProcess().setGoalAndPath(
+            new GoalRunAway(10.0D, hostiles.toArray(BlockPos[]::new))
+        );
+    }
+
+    private void finishHostileRetreat() {
+        cancelNative();
+        MiningSafety.disarmBreaking();
+        if (task.kind == TaskKind.MINE_CUBOID && task.currentCell != null) {
+            Cuboid deferred = task.currentCell;
+            deferCurrentCell(true);
+            nextCellPending = true;
+            setStage(Stage.TRAVELLING, "Hostile cleared; selecting a different nearby cell.");
+            sendEvent("Hostile area cleared; deferred " + deferred + " and selecting another cell.");
+        } else {
+            setStage(Stage.RECOVERING, "Hostile cleared; resuming the task.");
+            resumeCurrentTask();
+        }
+    }
+
+    private void deferCurrentCell(boolean countFailure) {
+        if (task == null || task.kind != TaskKind.MINE_CUBOID || task.currentCell == null) return;
+        Cuboid deferred = task.currentCell;
+        if (countFailure) {
+            task.failedAttempts.merge(deferred.toString(), 1, Integer::sum);
+        }
+        task.cells.addLast(deferred);
+        task.currentCell = null;
+        task.cellSnapshot.clear();
+        task.escapeSnapshot.clear();
+        task.failedAccessPositions.clear();
+        task.cleaningSupports = false;
+        task.descendingSupports = false;
+    }
+
     private void resumeCurrentTask() {
         if (task == null) return;
         if (task.kind == TaskKind.GOTO) {
@@ -588,7 +725,10 @@ public final class HiveTaskClient {
         for (int checked = 0; checked < MAX_EMPTY_CELLS_PER_TICK && nextCellPending; checked++) {
             nextCellPending = false;
             BlockPos playerPos = MC.player.blockPosition();
-            Cuboid next = MiningCellScheduler.choose(task.cells, task.failedAttempts, playerPos);
+            BlockPos schedulerPos = task.cuboid.horizontalDistanceSquared(playerPos) > COARSE_APPROACH_DISTANCE_SQR
+                ? new BlockPos(playerPos.getX(), task.cuboid.y1, playerPos.getZ())
+                : playerPos;
+            Cuboid next = MiningCellScheduler.choose(task.cells, task.failedAttempts, schedulerPos);
             if (next == null) {
                 finishMiningTask();
                 return;
@@ -1462,6 +1602,9 @@ public final class HiveTaskClient {
         }
         if (mined > 0 || skipped > 0) {
             task.minedBlocks += mined;
+            if (task.progress != null) {
+                task.progress.recordMined(mined);
+            }
             task.cellPassMined += mined;
             task.skippedToolBlocks += skipped;
             MiningSafety.replaceSnapshot(snapshot);
@@ -1489,7 +1632,9 @@ public final class HiveTaskClient {
         MiningSafety.disarmBreaking();
         task.cleaningSupports = false;
         task.descendingSupports = false;
-        task.completedCells++;
+        if (task.progress == null || task.progress.recordCompleted(task.currentCell.toString())) {
+            task.completedCells++;
+        }
         task.failedAttempts.remove(task.currentCell.toString());
         task.escapeAttempted.remove(task.currentCell.toString());
         task.escapeDescentAttempted.remove(task.currentCell.toString());
@@ -1590,6 +1735,9 @@ public final class HiveTaskClient {
         cancelNative();
         clearToolPickupState();
         MiningSafety.endManagedTask();
+        if (task != null && task.progress != null) {
+            task.progress.flushNow();
+        }
         task = null;
         nextCellPending = false;
         blocker = "";
@@ -1607,6 +1755,7 @@ public final class HiveTaskClient {
         MiningSafety.setBreakReach(BLOCK_REACH);
         BaritoneAPI.getSettings().blockReachDistance.value = BLOCK_REACH;
         configureVineAvoidance();
+        configureHostileMobAvoidance();
         BaritoneAPI.getSettings().allowBreak.value = false;
         BaritoneAPI.getSettings().allowPlace.value = false;
         BaritoneAPI.getSettings().allowParkour.value = false;
@@ -1621,6 +1770,7 @@ public final class HiveTaskClient {
         MiningSafety.setBreakReach(BLOCK_REACH);
         BaritoneAPI.getSettings().blockReachDistance.value = BLOCK_REACH;
         configureVineAvoidance();
+        configureHostileMobAvoidance();
         BaritoneAPI.getSettings().autoTool.value = true;
         BaritoneAPI.getSettings().assumeExternalAutoTool.value = false;
         BaritoneAPI.getSettings().allowInventory.value = true;
@@ -1641,6 +1791,14 @@ public final class HiveTaskClient {
             avoided.add(Blocks.VINE);
             BaritoneAPI.getSettings().blocksToAvoid.value = avoided;
         }
+    }
+
+    private void configureHostileMobAvoidance() {
+        BaritoneAPI.getSettings().avoidance.value = true;
+        BaritoneAPI.getSettings().mobAvoidanceCoefficient.value = 1.0D;
+        BaritoneAPI.getSettings().mobAvoidanceRadius.value = 6;
+        BaritoneAPI.getSettings().mobSpawnerAvoidanceCoefficient.value = 3.0D;
+        BaritoneAPI.getSettings().mobSpawnerAvoidanceRadius.value = 16;
     }
 
     private void configureMiningTravelSettings() {
@@ -1823,6 +1981,7 @@ public final class HiveTaskClient {
         TRAVELLING,
         MINING,
         ESCAPING,
+        FLEEING,
         PICKING_UP_TOOL,
         RECOVERING
     }
@@ -1868,6 +2027,10 @@ public final class HiveTaskClient {
         private int cellPassMined;
         private long minedBlocks;
         private long skippedToolBlocks;
+        private long hostileClearSinceMs;
+        private long lastHostileGoalMs;
+        private long lastHostileAttackMs;
+        private TaskProgressStore.State progress;
 
         private ActiveTask(String id, TaskKind kind, Cuboid cuboid, BlockPos destination, int minDurability) {
             this.id = id;
