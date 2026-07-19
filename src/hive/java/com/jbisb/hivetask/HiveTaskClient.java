@@ -74,6 +74,7 @@ public final class HiveTaskClient {
     private static final long STUCK_TIMEOUT_MS = envLong("TASK_STUCK_TIMEOUT_MS", 120000L);
     private static final long TAIL_STUCK_TIMEOUT_MS = envLong("TASK_TAIL_STUCK_TIMEOUT_MS", 30000L);
     private static final long INACTIVE_TIMEOUT_MS = envLong("TASK_INACTIVE_TIMEOUT_MS", 20000L);
+    private static final long UPWARD_NO_PATH_TIMEOUT_MS = envLong("TASK_UPWARD_NO_PATH_TIMEOUT_MS", 5000L);
     private static final long DIRECT_BREAK_FALLBACK_MS = envLong("TASK_DIRECT_BREAK_FALLBACK_MS", 5000L);
     private static final long SUPPORT_CLEANUP_IDLE_MS = envLong("TASK_SUPPORT_CLEANUP_IDLE_MS", 3000L);
     private static final long WORLD_JOIN_TIMEOUT_MS = envLong("TASK_WORLD_JOIN_TIMEOUT_MS", 90000L);
@@ -83,7 +84,7 @@ public final class HiveTaskClient {
     private static final long TOOL_PICKUP_TIMEOUT_MS = envLong("TASK_TOOL_PICKUP_TIMEOUT_MS", 30000L);
     private static final long TOOL_PICKUP_RETRY_DELAY_MS = envLong("TASK_TOOL_PICKUP_RETRY_DELAY_MS", 10000L);
     private static final double COARSE_APPROACH_DISTANCE_SQR = 64.0D * 64.0D;
-    private static final double COARSE_APPROACH_COMPLETE_SQR = 8.0D * 8.0D;
+    private static final double COARSE_APPROACH_COMPLETE_SQR = 12.0D * 12.0D;
     private static final Set<Item> TERRAIN_ITEMS = Set.of(
         Blocks.DIRT.asItem(),
         Blocks.COARSE_DIRT.asItem(),
@@ -216,6 +217,11 @@ public final class HiveTaskClient {
             case "escape" -> {
                 if (task.kind != TaskKind.MINE_CUBOID || task.currentCell == null) {
                     sendEvent("Recovery escape ignored because no mining cell is active.");
+                    return;
+                }
+                if (task.travelDestination != null
+                        && task.travelDestination.getY() > MC.player.blockPosition().getY() + 3) {
+                    recover("Upward cell access failed; deferred it instead of digging farther down.");
                     return;
                 }
                 sendEvent("Recovery supervisor requested coordinate-gated escape.");
@@ -583,10 +589,17 @@ public final class HiveTaskClient {
     private void deferCurrentCell(boolean countFailure) {
         if (task == null || task.kind != TaskKind.MINE_CUBOID || task.currentCell == null) return;
         Cuboid deferred = task.currentCell;
+        boolean requeue = true;
         if (countFailure) {
-            task.failedAttempts.merge(deferred.toString(), 1, Integer::sum);
+            int failures = task.failedAttempts.merge(deferred.toString(), 1, Integer::sum);
+            if (failures >= MAX_CELL_ATTEMPTS) {
+                task.blockedCells.add(deferred);
+                requeue = false;
+                sendEvent("Marked unreachable cell blocked after " + failures
+                    + " safe deferrals: " + deferred + ". Continuing the reachable frontier.");
+            }
         }
-        task.cells.addLast(deferred);
+        if (requeue) task.cells.addLast(deferred);
         task.currentCell = null;
         task.cellSnapshot.clear();
         task.escapeSnapshot.clear();
@@ -640,10 +653,27 @@ public final class HiveTaskClient {
         task.escapeClearing = false;
         task.escapeDescending = false;
         task.travelToCell = toMiningCell;
+        task.coarseTravel = false;
         blocker = "";
         BlockPos playerPos = MC.player.blockPosition();
 
         if (toMiningCell && task.currentCell != null) {
+            BlockPos cellCenter = task.currentCell.center();
+            if (!currentCellChunksLoaded()
+                    || horizontalDistanceSqr(playerPos, cellCenter) > COARSE_APPROACH_DISTANCE_SQR) {
+                MiningSafety.disarmBreaking();
+                configureTravelSettings();
+                task.coarseTravel = true;
+                task.travelDestination = cellCenter;
+                setStage(Stage.TRAVELLING, "");
+                watchdog.reset(stageSinceMs, MC.player.position(), 0);
+                primaryBaritone().getCustomGoalProcess().setGoalAndPath(
+                    new GoalXZ(cellCenter.getX(), cellCenter.getZ())
+                );
+                sendEvent("Approaching reachable-frontier cell " + task.currentCell
+                    + " non-destructively so its chunks can be scanned.");
+                return;
+            }
             configureMiningTravelSettings();
             Map<Long, Block> snapshot = snapshotCell(task.currentCell, true);
             task.cellSnapshot.clear();
@@ -667,21 +697,11 @@ public final class HiveTaskClient {
 
         IBaritone baritone = primaryBaritone();
         if (toMiningCell) {
-            task.coarseTravel = horizontalDistanceSqr(playerPos, destination) > COARSE_APPROACH_DISTANCE_SQR;
-            if (task.coarseTravel) {
-                MiningSafety.disarmBreaking();
-                configureTravelSettings();
-                baritone.getCustomGoalProcess().setGoalAndPath(new GoalXZ(destination.getX(), destination.getZ()));
-                sendEvent("Approaching distant cell column " + task.currentCell
-                    + " non-destructively before exact Y-level routing.");
-            } else {
-                baritone.getCustomGoalProcess().setGoalAndPath(new GoalBlock(destination));
-                sendEvent("Travelling to cell " + task.currentCell
-                    + " via " + destination
-                    + " with breaking restricted to " + task.cellSnapshot.size() + " snapshotted cell block(s).");
-            }
+            baritone.getCustomGoalProcess().setGoalAndPath(new GoalBlock(destination));
+            sendEvent("Travelling to reachable-frontier cell " + task.currentCell
+                + " via " + destination
+                + " with breaking restricted to " + task.cellSnapshot.size() + " snapshotted cell block(s).");
         } else {
-            task.coarseTravel = false;
             baritone.getCustomGoalProcess().setGoalAndPath(new GoalBlock(destination));
             sendEvent("Travelling non-destructively to " + destination + ".");
         }
@@ -691,13 +711,26 @@ public final class HiveTaskClient {
         BlockPos destination = task.travelDestination;
         if (destination == null) return;
         watchdog.observeToward(now, player.position(), 0, Vec3.atCenterOf(destination));
-        if (task.travelToCell) {
-            if (task.coarseTravel
-                    && horizontalDistanceSqr(player.blockPosition(), destination) <= COARSE_APPROACH_COMPLETE_SQR) {
-                sendEvent("Reached the distant cell column; calculating exact mining access.");
+        if (task.travelToCell && task.coarseTravel) {
+            if (currentCellChunksLoaded()
+                    && horizontalDistanceSqr(player.blockPosition(), task.currentCell.center())
+                        <= COARSE_APPROACH_COMPLETE_SQR) {
+                sendEvent("Reachable-frontier cell chunks loaded; resolving its exact safe access point.");
                 beginTravel(task.currentCell.center(), true);
                 return;
             }
+            boolean active = primaryBaritone().getCustomGoalProcess().isActive();
+            boolean calculating = primaryBaritone().getPathingBehavior().getInProgress().isPresent();
+            if (active || calculating) lastNativeActiveMs = now;
+            long idleFor = watchdog.idleFor(now);
+            if (!active && !calculating && now - stageSinceMs >= INACTIVE_TIMEOUT_MS) {
+                recoverTravel("Native Baritone stopped during the non-destructive cell approach.");
+            } else if (idleFor >= STUCK_TIMEOUT_MS) {
+                recoverTravel("No walking progress during the non-destructive cell approach.");
+            }
+            return;
+        }
+        if (task.travelToCell) {
             if (task.currentCell != null
                     && player.onGround()
                     && player.blockPosition().getY() >= destination.getY()
@@ -720,11 +753,24 @@ public final class HiveTaskClient {
         }
 
         boolean active = primaryBaritone().getCustomGoalProcess().isActive();
-        if (active) lastNativeActiveMs = now;
+        boolean calculating = primaryBaritone().getPathingBehavior().getInProgress().isPresent();
+        if (active || calculating) lastNativeActiveMs = now;
         long idleFor = watchdog.idleFor(now);
         if (task.travelToCell
+            && !active
+            && !calculating
+            && destination.getY() > player.blockPosition().getY() + 3
+            && now - stageSinceMs >= UPWARD_NO_PATH_TIMEOUT_MS) {
+            Cuboid deferred = task.currentCell;
+            int deferredBlocks = task.cellSnapshot.size();
+            deferCurrentCell(true);
+            nextCellPending = true;
+            setStage(Stage.TRAVELLING, "Unreachable upward cell deferred.");
+            sendEvent("Deferred " + deferred + " after Baritone found no upward path to its "
+                + deferredBlocks + " block(s); continuing the reachable frontier.");
+        } else if (task.travelToCell
             && task.cellSnapshot.size() <= 4
-            && ((!active && now - stageSinceMs >= INACTIVE_TIMEOUT_MS)
+            && ((!active && !calculating && now - stageSinceMs >= INACTIVE_TIMEOUT_MS)
                 || idleFor >= TAIL_STUCK_TIMEOUT_MS)) {
             Cuboid deferred = task.currentCell;
             int deferredBlocks = task.cellSnapshot.size();
@@ -742,7 +788,7 @@ public final class HiveTaskClient {
         } else if (idleFor >= INACTIVE_TIMEOUT_MS
             && beginRouteDescent("Route is stranded on an underfoot block; descending inside the assigned cuboid.")) {
             return;
-        } else if (!active && now - stageSinceMs >= INACTIVE_TIMEOUT_MS) {
+        } else if (!active && !calculating && now - stageSinceMs >= INACTIVE_TIMEOUT_MS) {
             recoverTravel("Native Baritone stopped before reaching the destination.");
         } else if (idleFor >= STUCK_TIMEOUT_MS) {
             recoverTravel("No walking progress for " + STUCK_TIMEOUT_MS / 1000L + " seconds.");
@@ -783,7 +829,11 @@ public final class HiveTaskClient {
     }
 
     private boolean beginRouteDescent(String reason) {
-        if (task == null || task.kind != TaskKind.MINE_CUBOID || task.travelDestination == null) return false;
+        if (task == null || task.kind != TaskKind.MINE_CUBOID || task.travelDestination == null
+                || MC.player == null
+                || task.travelDestination.getY() >= MC.player.blockPosition().getY()) {
+            return false;
+        }
         task.escapeDestination = task.travelDestination;
         blocker = reason;
         return beginEscapeDescent();
@@ -1041,15 +1091,20 @@ public final class HiveTaskClient {
 
     private Cuboid currentScaffoldColumn() {
         BlockPos access = task.travelDestination;
-        int x = access == null
+        int accessX = access == null
             ? clamp(MC.player.blockPosition().getX(), task.currentCell.x1, task.currentCell.x2)
-            : access.getX();
-        int z = access == null
+            : clamp(access.getX(), task.cuboid.x1, task.cuboid.x2);
+        int accessZ = access == null
             ? clamp(MC.player.blockPosition().getZ(), task.currentCell.z1, task.currentCell.z2)
-            : access.getZ();
+            : clamp(access.getZ(), task.cuboid.z1, task.cuboid.z2);
+        int playerX = clamp(MC.player.blockPosition().getX(), task.cuboid.x1, task.cuboid.x2);
+        int playerZ = clamp(MC.player.blockPosition().getZ(), task.cuboid.z1, task.cuboid.z2);
         return new Cuboid(
-            x, task.cuboid.y1, z,
-            x, Math.max(task.currentCell.y2, access == null ? task.currentCell.y2 : access.getY()), z
+            Math.min(playerX, accessX), task.cuboid.y1, Math.min(playerZ, accessZ),
+            Math.max(playerX, accessX),
+            Math.max(Math.max(task.currentCell.y2, MC.player.blockPosition().getY()),
+                access == null ? task.currentCell.y2 : access.getY()),
+            Math.max(playerZ, accessZ)
         );
     }
 
@@ -1341,9 +1396,9 @@ public final class HiveTaskClient {
         watchdog.reset(stageSinceMs, MC.player.position(), 0);
         lastNativeActiveMs = stageSinceMs;
         BlockPos destination = task.escapeDestination;
-        primaryBaritone().getCustomGoalProcess().setGoalAndPath(new GoalXZ(destination.getX(), destination.getZ()));
+        primaryBaritone().getCustomGoalProcess().setGoalAndPath(new GoalBlock(destination));
         sendEvent(reason + "; stepping non-destructively into cell at "
-            + destination.getX() + "," + destination.getZ() + ".");
+            + destination.getX() + "," + destination.getY() + "," + destination.getZ() + ".");
     }
 
     private void tickEscapeTraversal(long now, LocalPlayer player) {
@@ -1353,7 +1408,9 @@ public final class HiveTaskClient {
             return;
         }
         watchdog.observeToward(now, player.position(), 0, Vec3.atCenterOf(destination));
-        if (task.currentCell.containsHorizontal(player.blockPosition())) {
+        if (player.blockPosition().distSqr(destination) <= 4.0D
+                && task.currentCell.containsHorizontal(player.blockPosition())
+                && player.blockPosition().getY() >= task.currentCell.y1 - 1) {
             sendEvent("Stepped safely into the assigned cell; resuming its snapshot.");
             startMiningCell();
             return;
@@ -1698,7 +1755,13 @@ public final class HiveTaskClient {
     private void configureVineAvoidance() {
         BaritoneAPI.getSettings().allowVines.value = false;
         List<Block> avoided = new ArrayList<>(BaritoneAPI.getSettings().blocksToAvoid.value);
-        if (!avoided.contains(Blocks.VINE)) {
+        boolean standingInVines = MC.player != null && MC.level != null
+            && (MC.level.getBlockState(MC.player.blockPosition()).is(Blocks.VINE)
+                || MC.level.getBlockState(MC.player.blockPosition().above()).is(Blocks.VINE));
+        if (standingInVines) {
+            avoided.removeIf(block -> block == Blocks.VINE);
+            BaritoneAPI.getSettings().blocksToAvoid.value = avoided;
+        } else if (!avoided.contains(Blocks.VINE)) {
             avoided.add(Blocks.VINE);
             BaritoneAPI.getSettings().blocksToAvoid.value = avoided;
         }
@@ -1728,7 +1791,8 @@ public final class HiveTaskClient {
             if (task != null && task.cleaningSupports) configureBreakOnlySettings();
             else configureMiningSettings();
         } else if (stage == Stage.TRAVELLING && task != null && task.travelToCell) {
-            configureMiningTravelSettings();
+            if (task.coarseTravel) configureTravelSettings();
+            else configureMiningTravelSettings();
         } else if (stage == Stage.ESCAPING && task != null && (task.escapeClearing || task.escapeDescending)) {
             configureBreakOnlySettings();
         }
@@ -1783,6 +1847,7 @@ public final class HiveTaskClient {
         status.addProperty("blockReachDistance", BaritoneAPI.getSettings().blockReachDistance.value);
         status.addProperty("builderActive", primaryBaritone().getBuilderProcess().isActive());
         status.addProperty("pathingActive", primaryBaritone().getPathingBehavior().isPathing());
+        status.addProperty("pathingCalculating", primaryBaritone().getPathingBehavior().getInProgress().isPresent());
         BlockPos denied = MiningSafety.lastDeniedBreak();
         if (denied != null) status.add("lastDeniedBreak", positionJson(denied));
         BlockPos breakTarget = MiningSafety.lockedBreakTarget();

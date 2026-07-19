@@ -36,7 +36,6 @@ public final class MiningSafety {
     private static volatile boolean managedTask;
     private static volatile double breakReach = 3.0D;
     private static volatile Cuboid allowedPlacementCell;
-    private static volatile BlockPos allowedPlacementColumn;
     private static volatile BlockPos lastDeniedBreak;
 
     private MiningSafety() {}
@@ -68,30 +67,18 @@ public final class MiningSafety {
     static void armBreaking(Map<Long, Block> snapshot, Cuboid placementCell) {
         ALLOWED_BREAKS.set(Map.copyOf(snapshot));
         allowedPlacementCell = placementCell;
-        if (placementCell == null || MC.player == null) {
-            allowedPlacementColumn = null;
-        } else {
-            BlockPos player = MC.player.blockPosition();
-            allowedPlacementColumn = new BlockPos(
-                Math.max(placementCell.x1, Math.min(player.getX(), placementCell.x2)),
-                player.getY(),
-                Math.max(placementCell.z1, Math.min(player.getZ(), placementCell.z2))
-            );
-        }
         BREAK_TARGET.set(null);
     }
 
     static void armSupportCleanup(Map<Long, Block> supports) {
         ALLOWED_BREAKS.set(Map.copyOf(supports));
         allowedPlacementCell = null;
-        allowedPlacementColumn = null;
         BREAK_TARGET.set(null);
     }
 
     static void disarmBreaking() {
         ALLOWED_BREAKS.set(Map.of());
         allowedPlacementCell = null;
-        allowedPlacementColumn = null;
         BREAK_TARGET.set(null);
     }
 
@@ -163,13 +150,8 @@ public final class MiningSafety {
 
     public static boolean canPlanPlace(int x, int y, int z) {
         Cuboid cell = allowedPlacementCell;
-        BlockPos column = allowedPlacementColumn;
         if (!managedTask) return true;
-        if (cell == null || column == null || !cell.contains(x, y, z)) return false;
-        // Keep all temporary placement in one vertical tower. The planner must
-        // see the entire column, not only blocks below the player's current Y,
-        // or it can never calculate more than the first pillar movement.
-        return x == column.getX() && z == column.getZ();
+        return cell != null && cell.contains(x, y, z);
     }
 
     public static BlockPos lockedBreakTarget() {
