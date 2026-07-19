@@ -3,7 +3,6 @@ package com.jbisb.hivetask;
 import baritone.api.BaritoneAPI;
 import baritone.api.IBaritone;
 import baritone.api.pathing.goals.GoalBlock;
-import baritone.api.pathing.goals.GoalRunAway;
 import baritone.api.pathing.goals.GoalXZ;
 import baritone.api.utils.RayTraceUtils;
 import baritone.api.utils.RotationUtils;
@@ -21,7 +20,6 @@ import net.minecraft.tags.BlockTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.item.ItemEntity;
-import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.inventory.InventoryMenu;
 import net.minecraft.world.item.Item;
@@ -84,12 +82,6 @@ public final class HiveTaskClient {
     private static final long TOOL_SCAN_INTERVAL_MS = envLong("TASK_TOOL_SCAN_INTERVAL_MS", 500L);
     private static final long TOOL_PICKUP_TIMEOUT_MS = envLong("TASK_TOOL_PICKUP_TIMEOUT_MS", 30000L);
     private static final long TOOL_PICKUP_RETRY_DELAY_MS = envLong("TASK_TOOL_PICKUP_RETRY_DELAY_MS", 10000L);
-    private static final double HOSTILE_TRIGGER_DISTANCE_SQR = 6.0D * 6.0D;
-    private static final double HOSTILE_CLEAR_DISTANCE_SQR = 10.0D * 10.0D;
-    private static final double HOSTILE_ATTACK_DISTANCE_SQR = 3.2D * 3.2D;
-    private static final long HOSTILE_CLEAR_DELAY_MS = 2000L;
-    private static final long HOSTILE_GOAL_INTERVAL_MS = 1000L;
-    private static final long HOSTILE_ATTACK_INTERVAL_MS = 500L;
     private static final double COARSE_APPROACH_DISTANCE_SQR = 64.0D * 64.0D;
     private static final double COARSE_APPROACH_COMPLETE_SQR = 8.0D * 8.0D;
     private static final Set<Item> TERRAIN_ITEMS = Set.of(
@@ -561,16 +553,6 @@ public final class HiveTaskClient {
             return;
         }
 
-        if (stage == Stage.FLEEING) {
-            tickHostileRetreat(now, player);
-            return;
-        }
-        Monster nearbyHostile = nearestHostile(player, HOSTILE_TRIGGER_DISTANCE_SQR);
-        if (nearbyHostile != null) {
-            beginHostileRetreat(now, nearbyHostile);
-            return;
-        }
-
         if (stage == Stage.WAITING_WORLD || stage == Stage.WAITING_RESPAWN) {
             if (now - stageSinceMs >= 3000L) {
                 sendEvent("World is ready; resuming task with non-destructive travel.");
@@ -595,101 +577,6 @@ public final class HiveTaskClient {
             tickMining(now, player);
         } else if (stage == Stage.ESCAPING) {
             tickEscape(now, player);
-        }
-    }
-
-    private Monster nearestHostile(LocalPlayer player, double maximumDistanceSqr) {
-        if (MC.level == null) return null;
-        Monster nearest = null;
-        double nearestDistance = maximumDistanceSqr;
-        for (Entity entity : MC.level.entitiesForRendering()) {
-            if (!(entity instanceof Monster monster) || !monster.isAlive()) continue;
-            double distance = monster.distanceToSqr(player);
-            if (distance <= nearestDistance) {
-                nearest = monster;
-                nearestDistance = distance;
-            }
-        }
-        return nearest;
-    }
-
-    private List<BlockPos> nearbyHostilePositions(LocalPlayer player, double maximumDistanceSqr) {
-        List<BlockPos> positions = new ArrayList<>();
-        if (MC.level == null) return positions;
-        for (Entity entity : MC.level.entitiesForRendering()) {
-            if (entity instanceof Monster monster
-                    && monster.isAlive()
-                    && monster.distanceToSqr(player) <= maximumDistanceSqr) {
-                positions.add(monster.blockPosition());
-            }
-        }
-        return positions;
-    }
-
-    private void beginHostileRetreat(long now, Monster hostile) {
-        if (task == null) return;
-        pruneSnapshot();
-        cancelNative();
-        MiningSafety.disarmBreaking();
-        configureTravelSettings();
-        task.hostileClearSinceMs = 0L;
-        task.lastHostileGoalMs = 0L;
-        task.lastHostileAttackMs = 0L;
-        setStage(Stage.FLEEING, "Hostile mob within six blocks; retreating without breaking or placing.");
-        sendEvent("Hostile " + hostile.getType().toString()
-            + " detected nearby; retreating safely and deferring the current cell.");
-        updateHostileRetreatGoal(now, MC.player);
-    }
-
-    private void tickHostileRetreat(long now, LocalPlayer player) {
-        Monster attackTarget = nearestHostile(player, HOSTILE_ATTACK_DISTANCE_SQR);
-        if (attackTarget != null && MC.gameMode != null
-                && now - task.lastHostileAttackMs >= HOSTILE_ATTACK_INTERVAL_MS
-                && player.getAttackStrengthScale(0.0F) >= 0.9F) {
-            task.lastHostileAttackMs = now;
-            MC.gameMode.attack(player, attackTarget);
-            player.swing(InteractionHand.MAIN_HAND);
-        }
-
-        List<BlockPos> hostiles = nearbyHostilePositions(player, HOSTILE_CLEAR_DISTANCE_SQR);
-        if (hostiles.isEmpty()) {
-            if (task.hostileClearSinceMs == 0L) {
-                task.hostileClearSinceMs = now;
-            } else if (now - task.hostileClearSinceMs >= HOSTILE_CLEAR_DELAY_MS) {
-                finishHostileRetreat();
-            }
-            return;
-        }
-
-        task.hostileClearSinceMs = 0L;
-        if (now - task.lastHostileGoalMs >= HOSTILE_GOAL_INTERVAL_MS) {
-            updateHostileRetreatGoal(now, player);
-        }
-    }
-
-    private void updateHostileRetreatGoal(long now, LocalPlayer player) {
-        if (player == null) return;
-        List<BlockPos> hostiles = nearbyHostilePositions(player, HOSTILE_CLEAR_DISTANCE_SQR);
-        if (hostiles.isEmpty()) return;
-        task.lastHostileGoalMs = now;
-        configureTravelSettings();
-        primaryBaritone().getCustomGoalProcess().setGoalAndPath(
-            new GoalRunAway(10.0D, hostiles.toArray(BlockPos[]::new))
-        );
-    }
-
-    private void finishHostileRetreat() {
-        cancelNative();
-        MiningSafety.disarmBreaking();
-        if (task.kind == TaskKind.MINE_CUBOID && task.currentCell != null) {
-            Cuboid deferred = task.currentCell;
-            deferCurrentCell(true);
-            nextCellPending = true;
-            setStage(Stage.TRAVELLING, "Hostile cleared; selecting a different nearby cell.");
-            sendEvent("Hostile area cleared; deferred " + deferred + " and selecting another cell.");
-        } else {
-            setStage(Stage.RECOVERING, "Hostile cleared; resuming the task.");
-            resumeCurrentTask();
         }
     }
 
@@ -837,8 +724,15 @@ public final class HiveTaskClient {
         long idleFor = watchdog.idleFor(now);
         if (task.travelToCell
             && task.cellSnapshot.size() <= 4
-            && idleFor >= TAIL_STUCK_TIMEOUT_MS) {
-            recoverTravel("Could not reach the exact access square for a small mining tail.");
+            && ((!active && now - stageSinceMs >= INACTIVE_TIMEOUT_MS)
+                || idleFor >= TAIL_STUCK_TIMEOUT_MS)) {
+            Cuboid deferred = task.currentCell;
+            int deferredBlocks = task.cellSnapshot.size();
+            deferCurrentCell(true);
+            nextCellPending = true;
+            setStage(Stage.TRAVELLING, "Small inaccessible cell tail deferred.");
+            sendEvent("Deferred " + deferred + " after its last " + deferredBlocks
+                + " block(s) had no reachable access; continuing with another cell.");
         } else if (idleFor >= INACTIVE_TIMEOUT_MS
             && now - lastAccessAttemptMs >= 5000L
             && tryOpenNearbyAccess(player)) {
@@ -1161,52 +1055,36 @@ public final class HiveTaskClient {
 
     private BlockPos cellAccessDestination(BlockPos playerPos) {
         Cuboid cell = task.currentCell;
-        BlockPos preferredTarget = nearestSnapshotBlock(playerPos);
-        int belowY = Math.max(task.cuboid.y1, cell.y1 - 2);
         List<BlockPos> candidates = new ArrayList<>();
-        for (int x = cell.x1; x <= cell.x2; x++) {
-            for (int z = cell.z1; z <= cell.z2; z++) {
-                candidates.add(new BlockPos(x, belowY, z));
+        int minAccessY = Math.max(task.cuboid.y1, cell.y1 - 2);
+        int maxAccessY = cell.y2 + 1;
+        for (int y = minAccessY; y <= maxAccessY; y++) {
+            for (int x = cell.x1 - 1; x <= cell.x2 + 1; x++) {
+                for (int z = cell.z1 - 1; z <= cell.z2 + 1; z++) {
+                    candidates.add(new BlockPos(x, y, z));
+                }
             }
         }
-        BlockPos nearest = nearestOpenCellAccess(candidates, playerPos, preferredTarget);
+        BlockPos nearest = nearestOpenCellAccess(candidates, playerPos);
         if (nearest != null) return nearest;
 
-        int accessY = Math.max(task.cuboid.y1, cell.y1 - 1);
-        candidates.clear();
-        for (int x = cell.x1; x <= cell.x2; x++) {
-            candidates.add(new BlockPos(x, accessY, cell.z1 - 1));
-            candidates.add(new BlockPos(x, accessY, cell.z2 + 1));
-        }
-        for (int z = cell.z1; z <= cell.z2; z++) {
-            candidates.add(new BlockPos(cell.x1 - 1, accessY, z));
-            candidates.add(new BlockPos(cell.x2 + 1, accessY, z));
-        }
-
-        nearest = nearestOpenCellAccess(candidates, playerPos, preferredTarget);
-        if (nearest != null) return nearest;
-
-        if (preferredTarget != null) {
-            return new BlockPos(preferredTarget.getX(), cell.y2 + 1, preferredTarget.getZ());
-        }
-        return new BlockPos(clamp(playerPos.getX(), cell.x1, cell.x2), cell.y2 + 1,
-            clamp(playerPos.getZ(), cell.z1, cell.z2));
+        BlockPos fallback = nearestUnfailedSnapshotBlock(playerPos);
+        return fallback == null ? cell.center() : fallback;
     }
 
-    private BlockPos nearestOpenCellAccess(List<BlockPos> candidates, BlockPos playerPos, BlockPos preferredTarget) {
+    private BlockPos nearestOpenCellAccess(List<BlockPos> candidates, BlockPos playerPos) {
         BlockPos nearest = null;
         boolean nearestHasFooting = false;
         double nearestTargetDistance = Double.POSITIVE_INFINITY;
         double nearestDistance = Double.POSITIVE_INFINITY;
         for (BlockPos candidate : candidates) {
-            if (!task.cuboid.contains(candidate)
-                    || task.failedAccessPositions.contains(candidate.asLong())
-                    || !isOpenCellAccess(candidate)
-                    || (preferredTarget != null && !withinBreakReachFromAccess(candidate, preferredTarget))) {
+            if (task.failedAccessPositions.contains(candidate.asLong())
+                    || !isOpenCellAccess(candidate)) {
                 continue;
             }
+            double targetDistance = nearestSnapshotReachDistance(candidate);
+            if (!Double.isFinite(targetDistance)) continue;
             boolean hasFooting = hasStableFooting(candidate);
-            double targetDistance = preferredTarget == null ? 0.0D : candidate.distSqr(preferredTarget);
             double distance = candidate.distSqr(playerPos);
             if ((hasFooting && !nearestHasFooting)
                     || (hasFooting == nearestHasFooting
@@ -1221,11 +1099,37 @@ public final class HiveTaskClient {
         return nearest;
     }
 
+    private double nearestSnapshotReachDistance(BlockPos access) {
+        double nearestDistance = Double.POSITIVE_INFINITY;
+        for (long key : task.cellSnapshot.keySet()) {
+            BlockPos target = BlockPos.of(key);
+            if (withinBreakReachFromAccess(access, target)) {
+                nearestDistance = Math.min(nearestDistance, access.distSqr(target));
+            }
+        }
+        return nearestDistance;
+    }
+
     private BlockPos nearestSnapshotBlock(BlockPos playerPos) {
         BlockPos nearest = null;
         double nearestDistance = Double.POSITIVE_INFINITY;
         for (long key : task.cellSnapshot.keySet()) {
             BlockPos candidate = BlockPos.of(key);
+            double distance = candidate.distSqr(playerPos);
+            if (distance < nearestDistance) {
+                nearest = candidate;
+                nearestDistance = distance;
+            }
+        }
+        return nearest;
+    }
+
+    private BlockPos nearestUnfailedSnapshotBlock(BlockPos playerPos) {
+        BlockPos nearest = null;
+        double nearestDistance = Double.POSITIVE_INFINITY;
+        for (long key : task.cellSnapshot.keySet()) {
+            BlockPos candidate = BlockPos.of(key);
+            if (task.failedAccessPositions.contains(candidate.asLong())) continue;
             double distance = candidate.distSqr(playerPos);
             if (distance < nearestDistance) {
                 nearest = candidate;
@@ -1988,7 +1892,6 @@ public final class HiveTaskClient {
         TRAVELLING,
         MINING,
         ESCAPING,
-        FLEEING,
         PICKING_UP_TOOL,
         RECOVERING
     }
@@ -2034,9 +1937,6 @@ public final class HiveTaskClient {
         private int cellPassMined;
         private long minedBlocks;
         private long skippedToolBlocks;
-        private long hostileClearSinceMs;
-        private long lastHostileGoalMs;
-        private long lastHostileAttackMs;
         private TaskProgressStore.State progress;
 
         private ActiveTask(String id, TaskKind kind, Cuboid cuboid, BlockPos destination, int minDurability) {
