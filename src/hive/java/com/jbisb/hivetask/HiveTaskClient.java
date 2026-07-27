@@ -1715,6 +1715,20 @@ public final class HiveTaskClient {
                 controller.onPlayerDamageBlock(support, Direction.UP);
             }
             player.swing(InteractionHand.MAIN_HAND);
+        } else if (landed) {
+            int unreachable = task.escapeSnapshot.size();
+            resetDirectBreak();
+            task.escapeSnapshot.clear();
+            task.escapeDescending = false;
+            sendEvent("Descent reached stable ground; leaving " + unreachable
+                + " non-underfoot support block(s) instead of waiting without work.");
+            if (task.resumeTravelAfterDescent) {
+                task.resumeTravelAfterDescent = false;
+                beginTravel(task.currentCell.center(), true);
+            } else {
+                beginEscapeTraversal("Support descent reached stable ground");
+            }
+            return;
         }
         if (watchdog.idleFor(now) >= STUCK_TIMEOUT_MS) {
             resetDirectBreak();
