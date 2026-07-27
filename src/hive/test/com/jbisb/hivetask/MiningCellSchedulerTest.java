@@ -38,6 +38,20 @@ public class MiningCellSchedulerTest {
     }
 
     @Test
+    public void layerStartingAbovePlayerIsDeferred() {
+        Cuboid current = new Cuboid(0, 89, 0, 3, 92, 3);
+        Cuboid elevated = new Cuboid(100, 96, 100, 103, 100, 103);
+
+        Cuboid selected = MiningCellScheduler.choose(
+            List.of(elevated, current),
+            Map.of(),
+            new BlockPos(100, 92, 100)
+        );
+
+        assertSame(current, selected);
+    }
+
+    @Test
     public void lowestLayerWinsWhenAllRemainingLayersAreAboveTheAccessBand() {
         Cuboid lower = new Cuboid(0, 80, 0, 3, 84, 3);
         Cuboid upper = new Cuboid(0, 95, 0, 3, 100, 3);

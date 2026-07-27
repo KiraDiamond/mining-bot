@@ -36,6 +36,7 @@ public final class MiningSafety {
     private static volatile boolean managedTask;
     private static volatile double breakReach = 3.0D;
     private static volatile Cuboid allowedPlacementCell;
+    private static volatile boolean retainPlacedSupports;
     private static volatile BlockPos lastDeniedBreak;
 
     private MiningSafety() {}
@@ -67,18 +68,29 @@ public final class MiningSafety {
     static void armBreaking(Map<Long, Block> snapshot, Cuboid placementCell) {
         ALLOWED_BREAKS.set(Map.copyOf(snapshot));
         allowedPlacementCell = placementCell;
+        retainPlacedSupports = placementCell != null
+            && placementCell.y1 == placementCell.y2
+            && (placementCell.x1 != placementCell.x2 || placementCell.z1 != placementCell.z2);
+        if (retainPlacedSupports) {
+            // A repaired walking floor is permanent terrain, not scaffold. A
+            // support may have been recorded while climbing into the same hole,
+            // so untrack it before the next cell's cleanup can remove it.
+            PLACED_SUPPORTS.keySet().removeIf(key -> placementCell.contains(BlockPos.of(key)));
+        }
         BREAK_TARGET.set(null);
     }
 
     static void armSupportCleanup(Map<Long, Block> supports) {
         ALLOWED_BREAKS.set(Map.copyOf(supports));
         allowedPlacementCell = null;
+        retainPlacedSupports = false;
         BREAK_TARGET.set(null);
     }
 
     static void disarmBreaking() {
         ALLOWED_BREAKS.set(Map.of());
         allowedPlacementCell = null;
+        retainPlacedSupports = false;
         BREAK_TARGET.set(null);
     }
 
@@ -192,7 +204,9 @@ public final class MiningSafety {
         BlockPos placePos = targetState.canBeReplaced() ? target : target.relative(hit.getDirection());
         if (!canPlanPlace(placePos.getX(), placePos.getY(), placePos.getZ())) return false;
         if (!MC.level.getBlockState(placePos).canBeReplaced()) return false;
-        PLACED_SUPPORTS.put(placePos.asLong(), placedBlock);
+        if (!retainPlacedSupports) {
+            PLACED_SUPPORTS.put(placePos.asLong(), placedBlock);
+        }
         return true;
     }
 
