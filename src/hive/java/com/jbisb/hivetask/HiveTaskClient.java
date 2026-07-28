@@ -988,7 +988,7 @@ public final class HiveTaskClient {
                     if (state.isAir() || !state.getFluidState().isEmpty()) continue;
                     if (excludePlacedSupports && MiningSafety.isPlacedSupport(pos, state)) continue;
                     Block block = state.getBlock();
-                    if (state.is(BlockTags.LEAVES)) {
+                    if (isTreeBlock(state)) {
                         continue;
                     }
                     if (MiningSafety.isProtected(block) || MC.level.getBlockEntity(pos) != null) {
@@ -1248,9 +1248,14 @@ public final class HiveTaskClient {
     private boolean isSafeAccessBlock(BlockPos pos, BlockState state) {
         if (task.kind == TaskKind.MINE_CUBOID && pos.getY() < task.cuboid.y1) return false;
         if (state.isAir() || !state.getFluidState().isEmpty()) return false;
+        if (isTreeBlock(state)) return false;
         if (state.getDestroySpeed(MC.level, pos) < 0.0F) return false;
         if (MiningSafety.isProtected(state.getBlock()) || MC.level.getBlockEntity(pos) != null) return false;
         return !state.requiresCorrectToolForDrops() || hasSafeCorrectTool(state);
+    }
+
+    private static boolean isTreeBlock(BlockState state) {
+        return state.is(BlockTags.LOGS) || state.is(BlockTags.LEAVES);
     }
 
     private boolean isAdjacentToSnapshot(BlockPos pos) {
