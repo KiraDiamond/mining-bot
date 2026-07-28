@@ -24,9 +24,9 @@ public class MiningCellSchedulerTest {
     }
 
     @Test
-    public void highestReachableLayerWinsWhenPlayerCanAccessIt() {
+    public void nearestCurrentHeightLayerWinsWhenPlayerCanAccessIt() {
         Cuboid low = new Cuboid(0, 85, 0, 3, 89, 3);
-        Cuboid high = new Cuboid(100, 95, 100, 103, 100, 103);
+        Cuboid high = new Cuboid(100, 92, 100, 103, 96, 103);
 
         Cuboid selected = MiningCellScheduler.choose(
             List.of(low, high),
@@ -40,7 +40,7 @@ public class MiningCellSchedulerTest {
     @Test
     public void layerStartingAbovePlayerIsDeferred() {
         Cuboid current = new Cuboid(0, 89, 0, 3, 92, 3);
-        Cuboid elevated = new Cuboid(100, 96, 100, 103, 100, 103);
+        Cuboid elevated = new Cuboid(100, 93, 100, 103, 96, 103);
 
         Cuboid selected = MiningCellScheduler.choose(
             List.of(elevated, current),
@@ -78,5 +78,19 @@ public class MiningCellSchedulerTest {
         );
 
         assertSame(near, selected);
+    }
+
+    @Test
+    public void nearbyLowerTerrainWinsOverTinyFarHigherRemnant() {
+        Cuboid nearbyLower = new Cuboid(0, 65, 0, 3, 67, 3);
+        Cuboid farHigher = new Cuboid(100, 68, 100, 103, 70, 103);
+
+        Cuboid selected = MiningCellScheduler.choose(
+            List.of(farHigher, nearbyLower),
+            Map.of(),
+            new BlockPos(1, 70, 1)
+        );
+
+        assertSame(nearbyLower, selected);
     }
 }

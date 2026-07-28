@@ -7,6 +7,7 @@ import baritone.api.pathing.goals.GoalXZ;
 import baritone.api.pathing.goals.GoalYLevel;
 import baritone.api.utils.RayTraceUtils;
 import baritone.api.utils.RotationUtils;
+import baritone.api.utils.input.Input;
 import baritone.utils.ToolSet;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
@@ -71,6 +72,7 @@ public final class HiveTaskClient {
     private static final int CELL_SIZE = envInt("TASK_CELL_SIZE", 12, 4, 32);
     private static final int LAYER_HEIGHT = envInt("TASK_LAYER_HEIGHT", 5, 2, 8);
     private static final float BLOCK_REACH = (float) envDouble("TASK_BLOCK_REACH", 3.0D, 3.0D, 6.0D);
+    private static final float MINING_LOCK_REACH = BLOCK_REACH - 0.5F;
     private static final long STATUS_INTERVAL_MS = envLong("TASK_STATUS_INTERVAL_MS", 10000L);
     private static final long STUCK_TIMEOUT_MS = envLong("TASK_STUCK_TIMEOUT_MS", 120000L);
     private static final long TAIL_STUCK_TIMEOUT_MS = envLong("TASK_TAIL_STUCK_TIMEOUT_MS", 30000L);
@@ -1094,17 +1096,6 @@ public final class HiveTaskClient {
             return;
         }
 
-        var rotation = RotationUtils.reachable(primaryBaritone().getPlayerContext(), target, BLOCK_REACH);
-        if (rotation.isEmpty()) {
-            if (now - task.directBreakStartedMs >= INACTIVE_TIMEOUT_MS) {
-                sendEvent("Direct block target moved out of reach; repositioning instead of resetting its break.");
-                resetDirectBreak();
-                task.directBreakFallback = false;
-                beginTravel(task.currentCell.center(), true);
-            }
-            return;
-        }
-
         BlockState state = MC.level.getBlockState(target);
         if (!selectSupportBreakTool(state)) {
             resetDirectBreak();
@@ -1113,7 +1104,10 @@ public final class HiveTaskClient {
             return;
         }
 
-        var targetRotation = rotation.get();
+        var context = primaryBaritone().getPlayerContext();
+        var targetRotation = RotationUtils.calcRotationFromVec3d(
+            player.getEyePosition(1.0F), Vec3.atCenterOf(target), context.playerRotations()
+        );
         primaryBaritone().getLookBehavior().updateTarget(targetRotation, true);
         player.setYRot(targetRotation.getYaw());
         player.setXRot(targetRotation.getPitch());
@@ -1143,7 +1137,7 @@ public final class HiveTaskClient {
         double nearestDistance = Double.POSITIVE_INFINITY;
         for (long key : task.cellSnapshot.keySet()) {
             BlockPos candidate = BlockPos.of(key);
-            if (RotationUtils.reachable(primaryBaritone().getPlayerContext(), candidate, BLOCK_REACH).isEmpty()) {
+            if (RotationUtils.reachable(primaryBaritone().getPlayerContext(), candidate, MINING_LOCK_REACH).isEmpty()) {
                 continue;
             }
             double distance = player.getEyePosition(1.0F).distanceToSqr(Vec3.atCenterOf(candidate));
@@ -1189,7 +1183,7 @@ public final class HiveTaskClient {
                     BlockState state = MC.level.getBlockState(cursor);
                     if (!isSafeAccessBlock(cursor, state)) continue;
                     BlockPos candidate = cursor.immutable();
-                    if (RotationUtils.reachable(primaryBaritone().getPlayerContext(), candidate, BLOCK_REACH).isEmpty()) {
+                    if (RotationUtils.reachable(primaryBaritone().getPlayerContext(), candidate, MINING_LOCK_REACH).isEmpty()) {
                         continue;
                     }
                     double distance = player.getEyePosition(1.0F).distanceToSqr(Vec3.atCenterOf(candidate));
@@ -1398,7 +1392,7 @@ public final class HiveTaskClient {
         double nearestX = Math.max(target.getX(), Math.min(eyes.x, target.getX() + 1.0D));
         double nearestY = Math.max(target.getY(), Math.min(eyes.y, target.getY() + 1.0D));
         double nearestZ = Math.max(target.getZ(), Math.min(eyes.z, target.getZ() + 1.0D));
-        return eyes.distanceToSqr(nearestX, nearestY, nearestZ) <= BLOCK_REACH * BLOCK_REACH;
+        return eyes.distanceToSqr(nearestX, nearestY, nearestZ) <= MINING_LOCK_REACH * MINING_LOCK_REACH;
     }
 
     private boolean isOpenCellAccess(BlockPos pos) {
@@ -1657,11 +1651,14 @@ public final class HiveTaskClient {
                 && MC.level.getBlockEntity(underfoot) == null) {
             snapshot.put(underfoot.asLong(), underfootState.getBlock());
         }
-        if (snapshot.isEmpty() || !snapshot.containsKey(playerPos.below().asLong())) return false;
+        boolean hasBreakableUnderfoot = snapshot.containsKey(playerPos.below().asLong());
+        if (!hasBreakableUnderfoot && !MC.player.onGround()) return false;
 
         cancelNative();
         task.escapeSnapshot.clear();
         task.escapeSnapshot.putAll(snapshot);
+        task.escapeDescentStartY = playerPos.getY();
+        task.escapeNudging = false;
         task.escapeClearing = false;
         task.escapeDescending = true;
         configureBreakOnlySettings();
@@ -1671,8 +1668,12 @@ public final class HiveTaskClient {
         lastNativeActiveMs = stageSinceMs;
         task.escapeBreakTarget = null;
         task.escapeBreakClickStarted = false;
-        sendEvent("Horizontal escape is blocked; directly clearing " + snapshot.size()
-            + " exact snapshotted support block(s) without placement.");
+        if (hasBreakableUnderfoot) {
+            sendEvent("Horizontal escape is blocked; directly clearing " + snapshot.size()
+                + " exact snapshotted support block(s) without placement.");
+        } else {
+            sendEvent("Horizontal escape is blocked by protected terrain; entering movement-only descent.");
+        }
         return true;
     }
 
@@ -1682,10 +1683,34 @@ public final class HiveTaskClient {
             pruneSnapshot(task.escapeSnapshot);
         }
         int remaining = task.escapeSnapshot.size();
-        watchdog.observeWork(now, remaining);
         BlockState landingState = MC.level.getBlockState(player.blockPosition().below());
+        boolean movedDown = player.blockPosition().getY() < task.escapeDescentStartY;
+        if (movedDown && task.escapeNudging) {
+            primaryBaritone().getInputOverrideHandler().clearAllKeys();
+            task.escapeNudging = false;
+        }
+        if (remaining == 0 && !movedDown) {
+            BlockPos footprintSupport = safeFootprintSupport(player);
+            if (footprintSupport != null) {
+                task.escapeSnapshot.put(
+                    footprintSupport.asLong(), MC.level.getBlockState(footprintSupport).getBlock()
+                );
+                MiningSafety.replaceSnapshot(task.escapeSnapshot);
+                remaining = 1;
+                sendEvent("Still supported at the descent edge; clearing one additional snapshotted terrain block.");
+            } else {
+                if (task.escapeNudging && now - task.escapeNudgeStartedMs >= 10000L) {
+                    primaryBaritone().getInputOverrideHandler().clearAllKeys();
+                    task.escapeNudging = false;
+                    recover("Could not step off protected terrain after a bounded ten-second attempt.");
+                    return;
+                }
+                stepOffProtectedSupport(player, now);
+            }
+        }
+        watchdog.observeWork(now, remaining);
         boolean landed = player.blockPosition().getY() <= task.cuboid.y1
-            || (player.onGround() && !landingState.isAir() && !landingState.canBeReplaced());
+            || (movedDown && player.onGround() && !landingState.isAir() && !landingState.canBeReplaced());
         if ((remaining == 0 && landed) || player.blockPosition().getY() <= task.cuboid.y1) {
             resetDirectBreak();
             if (task.resumeTravelAfterDescent) {
@@ -1739,6 +1764,79 @@ public final class HiveTaskClient {
             resetDirectBreak();
             recover("Coordinate-gated support descent could not progress; " + remaining + " blocks remained.");
         }
+    }
+
+    private BlockPos safeFootprintSupport(LocalPlayer player) {
+        if (MC.level == null || task == null) return null;
+        int y = player.blockPosition().getY() - 1;
+        double[] offsets = {-0.3D, 0.3D};
+        for (double xOffset : offsets) {
+            for (double zOffset : offsets) {
+                BlockPos candidate = new BlockPos(
+                    (int) Math.floor(player.getX() + xOffset),
+                    y,
+                    (int) Math.floor(player.getZ() + zOffset)
+                );
+                BlockState state = MC.level.getBlockState(candidate);
+                if (candidate.getY() > task.cuboid.y1
+                        && task.cuboid.contains(candidate)
+                        && isSafeAccessBlock(candidate, state)) {
+                    return candidate;
+                }
+            }
+        }
+        return null;
+    }
+
+    private void stepOffProtectedSupport(LocalPlayer player, long now) {
+        BlockPos destination = nearestDropEdge(player);
+        if (destination == null) {
+            destination = task.escapeDestination != null
+                ? task.escapeDestination
+                : task.currentCell.center();
+        }
+        Vec3 eyes = player.getEyePosition(1.0F);
+        Vec3 horizontalTarget = new Vec3(
+            destination.getX() + 0.5D, eyes.y, destination.getZ() + 0.5D
+        );
+        var rotation = RotationUtils.calcRotationFromVec3d(
+            eyes, horizontalTarget, primaryBaritone().getPlayerContext().playerRotations()
+        );
+        player.setYRot(rotation.getYaw());
+        primaryBaritone().getLookBehavior().updateTarget(rotation, true);
+        primaryBaritone().getInputOverrideHandler().setInputForceState(Input.MOVE_FORWARD, true);
+        if (!task.escapeNudging) {
+            task.escapeNudging = true;
+            task.escapeNudgeStartedMs = now;
+            sendEvent("Standing on protected terrain after descent; stepping toward the assigned cell without breaking it.");
+        }
+    }
+
+    private BlockPos nearestDropEdge(LocalPlayer player) {
+        if (MC.level == null || task == null) return null;
+        BlockPos origin = player.blockPosition();
+        BlockPos nearest = null;
+        double nearestDistance = Double.POSITIVE_INFINITY;
+        for (int radius = 1; radius <= 8; radius++) {
+            for (int x = origin.getX() - radius; x <= origin.getX() + radius; x++) {
+                for (int z = origin.getZ() - radius; z <= origin.getZ() + radius; z++) {
+                    if (Math.max(Math.abs(x - origin.getX()), Math.abs(z - origin.getZ())) != radius) continue;
+                    BlockPos candidate = new BlockPos(x, origin.getY(), z);
+                    if (!task.cuboid.containsHorizontal(candidate)
+                            || !isOpenCellAccess(candidate)
+                            || !MC.level.getBlockState(candidate.below()).canBeReplaced()) {
+                        continue;
+                    }
+                    double distance = candidate.distSqr(origin);
+                    if (distance < nearestDistance) {
+                        nearest = candidate;
+                        nearestDistance = distance;
+                    }
+                }
+            }
+            if (nearest != null) return nearest;
+        }
+        return null;
     }
 
     private boolean selectSafeHotbarTool(BlockState state) {
@@ -2242,8 +2340,11 @@ public final class HiveTaskClient {
         private BlockPos escapeDestination;
         private BlockPos escapeBreakTarget;
         private boolean escapeBreakClickStarted;
+        private boolean escapeNudging;
+        private long escapeNudgeStartedMs;
         private BlockPos directBreakTarget;
         private long directBreakStartedMs;
+        private int escapeDescentStartY;
         private int totalCells;
         private int completedCells;
         private int travelAttempts;
